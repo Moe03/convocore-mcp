@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Build output (will be built in container)
+dist/
+
+# Documentation
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+verify.js
+claude_desktop_config.example.json
+EXAMPLES.md
+SETUP.md
+QUICKSTART.md
+ARCHITECTURE.md
+PROJECT_SUMMARY.md
+COMPLETED.md
+openapi.json
+
