@@ -33,10 +33,13 @@ A comprehensive Model Context Protocol (MCP) server for ConvoCore AI agents, pro
 
 - **WORKSPACE_SECRET**: Your ConvoCore workspace secret (Bearer token)
 - **CONVOCORE_API_REGION**: Either `eu-gcp` (default) or `na-gcp`
+- **Docker**: Required for Docker deployment (must be installed and running)
 
 ## 🚀 Quick Start
 
 ### Option 1: Docker (Recommended)
+
+> **⚠️ Prerequisites:** Make sure [Docker Desktop](https://www.docker.com/products/docker-desktop/) is installed and running before proceeding.
 
 ```bash
 docker run -d \
@@ -69,6 +72,8 @@ node dist/index.js
 
 ## 🔧 Claude Desktop Configuration
 
+> **⚠️ Docker Users:** Ensure Docker Desktop is installed and running before configuring Claude Desktop.
+> 
 > **💡 Tip:** Pull the Docker image first to avoid timeouts:
 > ```bash
 > docker pull moe003/convocore-mcp:latest
