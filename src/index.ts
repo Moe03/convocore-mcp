@@ -132,6 +132,53 @@ const AssignConversationSchema = z.object({
   delegatedBy: z.string().optional().describe('ID of user delegating this chat'),
 });
 
+// ==================== KNOWLEDGE BASE SCHEMAS ====================
+
+const CreateKBDocSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  name: z.string().describe('Document name'),
+  sourceType: z.enum(['doc', 'url', 'sitemap']).describe('Source type'),
+  content: z.string().optional().describe('Document content (for doc type)'),
+  metadata: z.any().optional().describe('Additional metadata'),
+  tags: z.array(z.string()).optional().describe('Tags for organization'),
+  refreshRate: z.enum(['6h', '12h', '24h', '7d', 'never']).optional().default('never').describe('Auto-refresh rate'),
+  urls: z.array(z.string()).optional().describe('URLs to process (for url type)'),
+  sitemapUrl: z.string().optional().describe('Sitemap URL (for sitemap type)'),
+  maxPages: z.number().optional().describe('Max pages from sitemap'),
+  scrapeContent: z.boolean().optional().describe('Whether to scrape content'),
+});
+
+const ListKBDocsSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  page: z.number().optional().default(1).describe('Page number'),
+  pageSize: z.number().optional().default(20).describe('Results per page'),
+});
+
+const GetKBDocSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  docId: z.string().describe('The document ID'),
+});
+
+const UpdateKBDocSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  docId: z.string().describe('The document ID'),
+  name: z.string().optional().describe('Updated document name'),
+  content: z.string().optional().describe('Updated content'),
+  metadata: z.any().optional().describe('Updated metadata'),
+  tags: z.array(z.string()).optional().describe('Updated tags'),
+  refreshRate: z.enum(['6h', '12h', '24h', '7d', 'never']).optional().describe('Updated refresh rate'),
+  url: z.string().optional().describe('Updated URL'),
+});
+
+const DeleteKBDocSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  docId: z.string().describe('The document ID'),
+});
+
+const GetKBStatsSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+});
+
 // Define MCP tools
 const tools: Tool[] = [
   {
@@ -540,6 +587,181 @@ const tools: Tool[] = [
       required: ['agentId', 'convoId', 'assignToUserId'],
     },
   },
+  // ==================== KNOWLEDGE BASE TOOLS ====================
+  {
+    name: 'create_kb_doc',
+    description: 'Add a document to an agent\'s knowledge base (VG agents only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        name: {
+          type: 'string',
+          description: 'Document name',
+        },
+        sourceType: {
+          type: 'string',
+          enum: ['doc', 'url', 'sitemap'],
+          description: 'Source type: doc (text content), url (single URL), sitemap (multiple pages)',
+        },
+        content: {
+          type: 'string',
+          description: 'Document content (required for sourceType: doc)',
+        },
+        metadata: {
+          type: 'object',
+          description: 'Additional metadata',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags for organization',
+        },
+        refreshRate: {
+          type: 'string',
+          enum: ['6h', '12h', '24h', '7d', 'never'],
+          description: 'Auto-refresh rate (default: never)',
+        },
+        urls: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of URLs (for sourceType: url)',
+        },
+        sitemapUrl: {
+          type: 'string',
+          description: 'Sitemap URL (for sourceType: sitemap)',
+        },
+        maxPages: {
+          type: 'number',
+          description: 'Max pages from sitemap',
+        },
+        scrapeContent: {
+          type: 'boolean',
+          description: 'Whether to scrape content from URLs',
+        },
+      },
+      required: ['agentId', 'name', 'sourceType'],
+    },
+  },
+  {
+    name: 'list_kb_docs',
+    description: 'List all knowledge base documents for an agent',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        page: {
+          type: 'number',
+          description: 'Page number (default: 1)',
+        },
+        pageSize: {
+          type: 'number',
+          description: 'Results per page (default: 20)',
+        },
+      },
+      required: ['agentId'],
+    },
+  },
+  {
+    name: 'get_kb_doc',
+    description: 'Get a single knowledge base document',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        docId: {
+          type: 'string',
+          description: 'The document ID',
+        },
+      },
+      required: ['agentId', 'docId'],
+    },
+  },
+  {
+    name: 'update_kb_doc',
+    description: 'Update a knowledge base document (VG agents only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        docId: {
+          type: 'string',
+          description: 'The document ID',
+        },
+        name: {
+          type: 'string',
+          description: 'Updated name',
+        },
+        content: {
+          type: 'string',
+          description: 'Updated content',
+        },
+        metadata: {
+          type: 'object',
+          description: 'Updated metadata',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Updated tags',
+        },
+        refreshRate: {
+          type: 'string',
+          enum: ['6h', '12h', '24h', '7d', 'never'],
+          description: 'Updated refresh rate',
+        },
+        url: {
+          type: 'string',
+          description: 'Updated URL',
+        },
+      },
+      required: ['agentId', 'docId'],
+    },
+  },
+  {
+    name: 'delete_kb_doc',
+    description: 'Delete a knowledge base document (VG agents only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        docId: {
+          type: 'string',
+          description: 'The document ID',
+        },
+      },
+      required: ['agentId', 'docId'],
+    },
+  },
+  {
+    name: 'get_kb_stats',
+    description: 'Get knowledge base statistics for an agent (VG agents only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+      },
+      required: ['agentId'],
+    },
+  },
 ];
 
 // Create MCP server
@@ -840,6 +1062,92 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validated.assignToUserId,
           validated.delegatedBy
         );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      // ==================== KNOWLEDGE BASE HANDLERS ====================
+
+      case 'create_kb_doc': {
+        const validated = CreateKBDocSchema.parse(args);
+        const { agentId, ...kbData } = validated;
+        const result = await client.createKBDoc(agentId, kbData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'list_kb_docs': {
+        const validated = ListKBDocsSchema.parse(args);
+        const result = await client.listKBDocs(
+          validated.agentId,
+          validated.page,
+          validated.pageSize
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_kb_doc': {
+        const validated = GetKBDocSchema.parse(args);
+        const result = await client.getKBDoc(validated.agentId, validated.docId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'update_kb_doc': {
+        const validated = UpdateKBDocSchema.parse(args);
+        const { agentId, docId, ...kbData } = validated;
+        const result = await client.updateKBDoc(agentId, docId, kbData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'delete_kb_doc': {
+        const validated = DeleteKBDocSchema.parse(args);
+        const result = await client.deleteKBDoc(validated.agentId, validated.docId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_kb_stats': {
+        const validated = GetKBStatsSchema.parse(args);
+        const result = await client.getKBStats(validated.agentId);
         return {
           content: [
             {

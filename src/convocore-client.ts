@@ -261,5 +261,65 @@ export class ConvoCoreClient {
       body: JSON.stringify({ assignToUserId, delegatedBy }),
     });
   }
+
+  // ==================== KNOWLEDGE BASE METHODS ====================
+
+  /**
+   * Create a knowledge base document
+   */
+  async createKBDoc(agentId: string, kbData: any): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/kb`, {
+      method: 'POST',
+      body: JSON.stringify(kbData),
+    });
+  }
+
+  /**
+   * List all KB docs for an agent
+   */
+  async listKBDocs(
+    agentId: string,
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<any> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      pageSize: pageSize.toString(),
+    });
+    return this.request<any>(`/agents/${agentId}/kb?${params.toString()}`);
+  }
+
+  /**
+   * Get a single KB document
+   */
+  async getKBDoc(agentId: string, docId: string): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/kb/${docId}`);
+  }
+
+  /**
+   * Update a KB document
+   */
+  async updateKBDoc(agentId: string, docId: string, kbData: any): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/kb/${docId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(kbData),
+    });
+  }
+
+  /**
+   * Delete a KB document
+   */
+  async deleteKBDoc(agentId: string, docId: string): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/kb/${docId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
+   * Get KB stats for an agent
+   */
+  async getKBStats(agentId: string): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/kb/stats`);
+  }
 }
 

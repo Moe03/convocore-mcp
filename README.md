@@ -1,6 +1,6 @@
 # ConvoCore MCP Server 🚀
 
-A comprehensive Model Context Protocol (MCP) server for ConvoCore AI agents, providing complete CRUD operations for agents and conversations.
+A comprehensive Model Context Protocol (MCP) server for ConvoCore AI agents, providing complete CRUD operations for agents, conversations, and knowledge base.
 
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -20,6 +20,14 @@ A comprehensive Model Context Protocol (MCP) server for ConvoCore AI agents, pro
 - ✅ Export conversations (JSON/CSV)
 - ✅ Assign conversations to users
 - ✅ Pagination support
+
+### Complete Knowledge Base Management (6 Tools)
+- ✅ Create, Read, Update, Delete KB documents
+- ✅ List all KB docs with pagination
+- ✅ Get KB statistics
+- ✅ Support for docs, URLs, and sitemaps
+- ✅ Auto-refresh capabilities
+- ✅ Tag organization
 
 ## 📋 Prerequisites
 
@@ -109,9 +117,9 @@ Add to your `claude_desktop_config.json`:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
-## 📚 Available Tools
+## 📚 Available Tools (23 Total)
 
-### Agent Tools
+### Agent Tools (9)
 
 #### 1. `create_agent`
 Create a new ConvoCore AI agent.
@@ -223,7 +231,7 @@ Get agent usage statistics and credits.
 }
 ```
 
-### Conversation Tools
+### Conversation Tools (8)
 
 #### 10. `list_conversations`
 List all conversations for an agent.
@@ -317,6 +325,99 @@ Assign a conversation to a user.
 }
 ```
 
+### Knowledge Base Tools (6)
+
+#### 18. `create_kb_doc`
+Add a document to an agent's knowledge base.
+
+**Supports 3 source types:**
+- `doc` - Direct text content
+- `url` - Scrape from URLs
+- `sitemap` - Process entire sitemap
+
+```javascript
+{
+  "agentId": "agent_123",
+  "name": "Product Documentation",
+  "sourceType": "doc",
+  "content": "Full product documentation here...",
+  "tags": ["docs", "product"],
+  "refreshRate": "24h"
+}
+
+// URL example
+{
+  "agentId": "agent_123",
+  "name": "Website Content",
+  "sourceType": "url",
+  "urls": ["https://example.com/page1", "https://example.com/page2"],
+  "scrapeContent": true
+}
+
+// Sitemap example
+{
+  "agentId": "agent_123",
+  "name": "Full Website",
+  "sourceType": "sitemap",
+  "sitemapUrl": "https://example.com/sitemap.xml",
+  "maxPages": 100
+}
+```
+
+#### 19. `list_kb_docs`
+List all KB documents for an agent.
+
+```javascript
+{
+  "agentId": "agent_123",
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+#### 20. `get_kb_doc`
+Get a single KB document.
+
+```javascript
+{
+  "agentId": "agent_123",
+  "docId": "doc_456"
+}
+```
+
+#### 21. `update_kb_doc`
+Update a KB document.
+
+```javascript
+{
+  "agentId": "agent_123",
+  "docId": "doc_456",
+  "name": "Updated Name",
+  "content": "Updated content...",
+  "tags": ["updated", "v2"],
+  "refreshRate": "12h"
+}
+```
+
+#### 22. `delete_kb_doc`
+Delete a KB document.
+
+```javascript
+{
+  "agentId": "agent_123",
+  "docId": "doc_456"
+}
+```
+
+#### 23. `get_kb_stats`
+Get KB statistics for an agent.
+
+```javascript
+{
+  "agentId": "agent_123"
+}
+```
+
 ## 🎓 Usage Examples in Claude Desktop
 
 Once configured, you can use natural language in Claude Desktop:
@@ -336,6 +437,15 @@ Once configured, you can use natural language in Claude Desktop:
 - "Export all conversations from agent abc123 as CSV"
 - "Assign conversation xyz456 to user john123"
 - "Update conversation xyz456 to add tag 'resolved'"
+
+### Knowledge Base Management
+- "Add a document called 'FAQ' to agent abc123's knowledge base"
+- "List all KB documents for agent abc123"
+- "Show me KB doc doc456 from agent abc123"
+- "Update KB doc doc456 to refresh every 24 hours"
+- "Delete KB doc doc456 from agent abc123"
+- "Show me KB stats for agent abc123"
+- "Add website content from https://example.com to agent's KB"
 
 ## 🏗️ Architecture
 
