@@ -1,12 +1,16 @@
 {
   "mcpServers": {
     "convocore": {
-      "command": "node",
-      "args": ["/Users/Apple/Documents/GitHub/convocore-mcp/dist/index.js"],
-      "env": {
-        "WORKSPACE_SECRET": "vg_jixC84hSLMMp1hQWU3sr",
-        "CONVOCORE_API_REGION": "eu-gcp"
-      }
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--pull", "always",
+        "-e", "WORKSPACE_SECRET=your_workspace_secret_here",
+        "-e", "CONVOCORE_API_REGION=eu-gcp",
+        "moe003/convocore-mcp:latest"
+      ]
     }
   }
 }

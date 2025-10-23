@@ -92,6 +92,7 @@ Add to your `claude_desktop_config.json`:
         "run",
         "-i",
         "--rm",
+        "--pull", "always",
         "-e", "WORKSPACE_SECRET=your_workspace_secret_here",
         "-e", "CONVOCORE_API_REGION=eu-gcp",
         "moe003/convocore-mcp:latest"
@@ -100,6 +101,8 @@ Add to your `claude_desktop_config.json`:
   }
 }
 ```
+
+> **💡 Note:** The `--pull always` flag ensures you always get the latest version with updates!
 
 ### Using Local Node.js:
 ```json
