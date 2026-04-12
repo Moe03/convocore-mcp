@@ -30,7 +30,8 @@ const CreateAgentSchema = z.object({
   enableVertex: z.boolean().optional().describe('Enable Vertex AI'),
   autoOpenWidget: z.boolean().optional().describe('Auto-open widget on load'),
   voiceConfig: z.record(z.any()).optional().describe('Voice configuration object'),
-  additionalConfig: z.record(z.any()).optional().describe('Additional agent configuration'),
+  nodes: z.array(z.any()).optional().describe('Agent nodes; nodes[0].instructions is the main prompt'),
+  additionalConfig: z.record(z.any()).optional().describe('Additional agent configuration merged into agent'),
 });
 
 const GetAgentSchema = z.object({
@@ -47,7 +48,8 @@ const UpdateAgentSchema = z.object({
   enableVertex: z.boolean().optional().describe('Updated Vertex AI setting'),
   autoOpenWidget: z.boolean().optional().describe('Updated auto-open widget setting'),
   voiceConfig: z.record(z.any()).optional().describe('Updated voice configuration'),
-  additionalConfig: z.record(z.any()).optional().describe('Additional configuration updates'),
+  nodes: z.array(z.any()).optional().describe('Agent nodes; nodes[0].instructions updates the main prompt'),
+  additionalConfig: z.record(z.any()).optional().describe('Additional configuration merged into agent'),
 });
 
 const DeleteAgentSchema = z.object({

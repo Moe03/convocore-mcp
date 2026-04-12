@@ -5,7 +5,6 @@ services:
     image: moe003/convocore-mcp:latest
     container_name: convocore-mcp-server
     environment:
-      - CONVOCORE_API_KEY=${CONVOCORE_API_KEY}
       - WORKSPACE_SECRET=${WORKSPACE_SECRET}
       - CONVOCORE_API_REGION=${CONVOCORE_API_REGION:-eu-gcp}
     stdin_open: true
