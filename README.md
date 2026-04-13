@@ -1,6 +1,6 @@
 # ConvoCore MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **23 tools** for agents, conversations, and knowledge bases.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **29 tools** for agents, conversations, knowledge bases, and crawler jobs.
 
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -28,6 +28,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Agents | 9 | CRUD, list, search, export/import template, usage stats |
 | Conversations | 8 | CRUD, list with pagination, export (JSON/CSV), assign to user |
 | Knowledge base | 6 | CRUD, list, stats (described in-tool as **VG agents** only) |
+| Crawler | 6 | Create, list, inspect, page through results, and delete immutable crawler jobs |
 
 ---
 
@@ -71,8 +72,9 @@ flowchart LR
 |----------|----------|---------|---------|
 | `WORKSPACE_SECRET` | **Yes** | — | Bearer token for the ConvoCore workspace (same as API key/secret from your dashboard). |
 | `CONVOCORE_API_REGION` | No | `eu-gcp` | `eu-gcp` or `na-gcp`; selects API host (see below). |
+| `CONVOCORE_API_BASE_URL` | No | — | Optional full base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. |
 
-The server **only** reads these two names for auth and region. Any other variables in compose files or docs are ignored unless you wire them yourself.
+The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, and optional `CONVOCORE_API_BASE_URL`. Any other variables in compose files or docs are ignored unless you wire them yourself.
 
 ### API regions and base URLs
 
@@ -80,6 +82,8 @@ The server **only** reads these two names for auth and region. Any other variabl
 |------------------------|----------|
 | `eu-gcp` | `https://eu-gcp-api.vg-stuff.com/v3` |
 | `na-gcp` | `https://na-gcp-api.vg-stuff.com/v3` |
+
+For local development, set `CONVOCORE_API_BASE_URL=http://localhost:5000/v3`.
 
 ---
 
@@ -215,6 +219,12 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `update_kb_doc` | PATCH | `/agents/{agentId}/kb/{docId}` |
 | `delete_kb_doc` | DELETE | `/agents/{agentId}/kb/{docId}` |
 | `get_kb_stats` | GET | `/agents/{agentId}/kb/stats` |
+| `create_crawler_job` | POST | `/workspaces/{workspaceId}/crawler/jobs` body: crawler job fields |
+| `list_crawler_jobs` | GET | `/workspaces/{workspaceId}/crawler/jobs?page&limit` |
+| `get_crawler_job` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}` |
+| `delete_crawler_job` | DELETE | `/workspaces/{workspaceId}/crawler/jobs/{jobId}` |
+| `list_crawler_job_pages` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages?page&limit` |
+| `get_crawler_job_page` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages/{pageId}` |
 
 ---
 
@@ -283,6 +293,32 @@ Optional: `metadata`, `tags`, `refreshRate` — `6h` | `12h` | `24h` | `7d` | `n
 
 **`get_kb_stats`** — Required: `agentId`.
 
+### Crawler tools
+
+Crawler jobs are intentionally **immutable** after creation. There is **no** `update_crawler_job` tool. If you need different URLs, crawl settings, or webhook settings, the supported workflow is **delete + recreate**.
+
+**`create_crawler_job`** — Required: `workspaceId`, `urls` (1+ URLs). Optional: `crawl`, `crawlOptions`, `deep`, `useProxy`, `refreshRate`, `toAgentId`, `toAgentIds`, `webhook`.
+
+- **`crawlOptions.maxPages`** — integer `1..500`.
+- **`crawlOptions.urlMatchers`** — include path matchers.
+- **`crawlOptions.unMatchers`** — exclude path matchers.
+- **`crawlOptions.stayOnDomain`** — stay on the source domain.
+- **`webhook.events`** — `page_scraped` | `job_completed` | `job_failed`.
+- **`webhook.secret`** — mirrored back in crawler webhook headers.
+- **`webhook.bearerToken`** — sent as the outbound webhook `Authorization` header.
+- **`webhook.headers`** — extra outbound webhook headers.
+- The API response keeps billing fields like **`creditsPerPage`** and **`estimatedCredits`** intact.
+
+**`list_crawler_jobs`** — Required: `workspaceId`. Optional: `page` (default 1), `limit` (default 20, max 100).
+
+**`get_crawler_job`** — Required: `workspaceId`, `jobId`. Returns the full crawler job state, including counts, webhook metadata, and billing estimates such as `creditsPerPage` / `estimatedCredits`.
+
+**`delete_crawler_job`** — Required: `workspaceId`, `jobId`. Deletes the job **and** its stored page data.
+
+**`list_crawler_job_pages`** — Required: `workspaceId`, `jobId`. Optional: `page` (default 1), `limit` (default 20, max 100). Returns scraped page summaries.
+
+**`get_crawler_job_page`** — Required: `workspaceId`, `jobId`, `pageId`. Returns one scraped page, including markdown / HTML payload when available.
+
 ---
 
 ## ConvoCore concepts: nodes and prompts
@@ -310,6 +346,8 @@ After configuration, users can ask their assistant things like:
 - “Create an agent titled X with this prompt …” → `create_agent` with `nodes[0].instructions`
 - “Export all conversations for agent … as CSV” → `export_all_conversations`
 - “Add a URL source to the KB for agent …” → `create_kb_doc` with `sourceType: url`
+- “Create a crawler job for workspace … that crawls this site and pushes results to my agent” → `create_crawler_job`
+- “Show me the pages scraped for crawler job …” → `list_crawler_job_pages`
 
 Exact tool choice and arguments are up to the host model; the **tool descriptions** in `src/index.ts` are what the model sees.
 

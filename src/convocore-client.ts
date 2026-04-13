@@ -8,6 +8,9 @@ import {
   Agent,
   CreateAgentPayload,
   UpdateAgentPayload,
+  CreateCrawlerJobPayload,
+  CrawlerJob,
+  CrawlerPageSummary,
   ApiResponse,
   ListAgentsResponse,
   ApiError,
@@ -320,6 +323,95 @@ export class ConvoCoreClient {
    */
   async getKBStats(agentId: string): Promise<any> {
     return this.request<any>(`/agents/${agentId}/kb/stats`);
+  }
+
+  // ==================== CRAWLER METHODS ====================
+
+  /**
+   * Create a crawler job for a workspace
+   */
+  async createCrawlerJob(
+    workspaceId: string,
+    payload: CreateCrawlerJobPayload
+  ): Promise<ApiResponse<CrawlerJob>> {
+    return this.request<ApiResponse<CrawlerJob>>(
+      `/workspaces/${workspaceId}/crawler/jobs`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  /**
+   * List crawler jobs for a workspace
+   */
+  async listCrawlerJobs(
+    workspaceId: string,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<ApiResponse<{ jobs: CrawlerJob[]; total: number; page: number; pageSize: number }>> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+    });
+
+    return this.request<ApiResponse<{ jobs: CrawlerJob[]; total: number; page: number; pageSize: number }>>(
+      `/workspaces/${workspaceId}/crawler/jobs?${params.toString()}`
+    );
+  }
+
+  /**
+   * Get a single crawler job
+   */
+  async getCrawlerJob(workspaceId: string, jobId: string): Promise<ApiResponse<CrawlerJob>> {
+    return this.request<ApiResponse<CrawlerJob>>(
+      `/workspaces/${workspaceId}/crawler/jobs/${jobId}`
+    );
+  }
+
+  /**
+   * Delete a crawler job
+   */
+  async deleteCrawlerJob(workspaceId: string, jobId: string): Promise<ApiResponse> {
+    return this.request<ApiResponse>(
+      `/workspaces/${workspaceId}/crawler/jobs/${jobId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  /**
+   * List scraped pages for a crawler job
+   */
+  async listCrawlerJobPages(
+    workspaceId: string,
+    jobId: string,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<ApiResponse<{ pages: CrawlerPageSummary[]; total: number; page: number; pageSize: number }>> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+    });
+
+    return this.request<ApiResponse<{ pages: CrawlerPageSummary[]; total: number; page: number; pageSize: number }>>(
+      `/workspaces/${workspaceId}/crawler/jobs/${jobId}/pages?${params.toString()}`
+    );
+  }
+
+  /**
+   * Get a single scraped page for a crawler job
+   */
+  async getCrawlerJobPage(
+    workspaceId: string,
+    jobId: string,
+    pageId: string
+  ): Promise<any> {
+    return this.request<any>(
+      `/workspaces/${workspaceId}/crawler/jobs/${jobId}/pages/${pageId}`
+    );
   }
 }
 

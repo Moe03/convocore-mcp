@@ -181,6 +181,68 @@ const GetKBStatsSchema = z.object({
   agentId: z.string().describe('The agent ID'),
 });
 
+// ==================== CRAWLER SCHEMAS ====================
+
+const CrawlerWebhookEventValues = ['page_scraped', 'job_completed', 'job_failed'] as const;
+const CrawlerWebhookEventSchema = z.enum(CrawlerWebhookEventValues);
+
+const CrawlerCrawlOptionsSchema = z.object({
+  maxPages: z.number().int().min(1).max(500).optional().describe('Maximum number of pages the crawler can process'),
+  urlMatchers: z.array(z.string()).optional().describe('URL path matchers that define which pages are in scope'),
+  unMatchers: z.array(z.string()).optional().describe('URL path matchers that should be excluded'),
+  stayOnDomain: z.boolean().optional().describe('If true, only pages on the same domain are crawled'),
+}).optional().describe('Optional crawl behavior settings');
+
+const CrawlerWebhookSchema = z.object({
+  url: z.string().url().describe('HTTPS endpoint that should receive crawler callbacks'),
+  events: z.array(CrawlerWebhookEventSchema).min(1).optional().describe('Webhook events to deliver'),
+  secret: z.string().optional().describe('Optional secret mirrored back in crawler webhook headers'),
+  bearerToken: z.string().optional().describe('Optional bearer token sent as the Authorization header'),
+  headers: z.record(z.string()).optional().describe('Optional additional headers sent with each webhook request'),
+}).optional().describe('Optional outbound webhook configuration');
+
+const CreateCrawlerJobSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler job'),
+  urls: z.array(z.string().url()).min(1).describe('One or more source URLs to scrape or use as crawl entry points'),
+  crawl: z.boolean().optional().describe('If true, discovered URLs can be followed and scraped as part of the same job'),
+  crawlOptions: CrawlerCrawlOptionsSchema,
+  deep: z.boolean().optional().describe('If true, use deep scraping behavior'),
+  useProxy: z.boolean().optional().describe('If true, the crawler uses proxy scraping and paid proxy pricing'),
+  refreshRate: z.string().optional().describe('Optional refresh cadence for KB-linked scrapes'),
+  toAgentId: z.string().optional().describe('Optional single agent destination for KB import'),
+  toAgentIds: z.array(z.string()).optional().describe('Optional list of agent destinations for KB import'),
+  webhook: CrawlerWebhookSchema,
+});
+
+const ListCrawlerJobsSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler jobs'),
+  page: z.number().int().min(1).optional().default(1).describe('Page number'),
+  limit: z.number().int().min(1).max(100).optional().default(20).describe('Results per page'),
+});
+
+const GetCrawlerJobSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler job'),
+  jobId: z.string().describe('The crawler job ID'),
+});
+
+const DeleteCrawlerJobSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler job'),
+  jobId: z.string().describe('The crawler job ID to delete'),
+});
+
+const ListCrawlerJobPagesSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler job'),
+  jobId: z.string().describe('The crawler job ID'),
+  page: z.number().int().min(1).optional().default(1).describe('Page number'),
+  limit: z.number().int().min(1).max(100).optional().default(20).describe('Results per page'),
+});
+
+const GetCrawlerJobPageSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the crawler job'),
+  jobId: z.string().describe('The crawler job ID'),
+  pageId: z.string().describe('The scraped page ID'),
+});
+
 // Define MCP tools
 const tools: Tool[] = [
   {
@@ -764,6 +826,221 @@ const tools: Tool[] = [
       required: ['agentId'],
     },
   },
+  // ==================== CRAWLER TOOLS ====================
+  {
+    name: 'create_crawler_job',
+    description: 'Create a new crawler or scrape job for a workspace. IMPORTANT: crawler jobs are immutable after submission and cannot be updated. To change configuration, delete the existing job and create a new one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler job',
+        },
+        urls: {
+          type: 'array',
+          items: {
+            type: 'string',
+            format: 'uri',
+          },
+          minItems: 1,
+          description: 'One or more source URLs to scrape or use as crawl entry points',
+        },
+        crawl: {
+          type: 'boolean',
+          description: 'If true, discovered URLs can be followed and scraped as part of the same job',
+        },
+        crawlOptions: {
+          type: 'object',
+          description: 'Optional crawl behavior settings',
+          properties: {
+            maxPages: {
+              type: 'number',
+              description: 'Maximum number of pages the crawler is allowed to process (1-500)',
+            },
+            urlMatchers: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'URL path matchers that define which pages are in scope',
+            },
+            unMatchers: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'URL path matchers that should be excluded',
+            },
+            stayOnDomain: {
+              type: 'boolean',
+              description: 'If true, only pages on the same domain are crawled',
+            },
+          },
+        },
+        deep: {
+          type: 'boolean',
+          description: 'If true, use deep scraping behavior',
+        },
+        useProxy: {
+          type: 'boolean',
+          description: 'If true, the crawler uses proxy scraping and paid proxy pricing',
+        },
+        refreshRate: {
+          type: 'string',
+          description: 'Optional refresh cadence for KB-linked scrapes',
+        },
+        toAgentId: {
+          type: 'string',
+          description: 'Optional single agent destination for KB import',
+        },
+        toAgentIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of agent destinations for KB import',
+        },
+        webhook: {
+          type: 'object',
+          description: 'Optional outbound webhook that receives crawler events',
+          properties: {
+            url: {
+              type: 'string',
+              format: 'uri',
+              description: 'HTTPS endpoint that should receive crawler callbacks',
+            },
+            events: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: [...CrawlerWebhookEventValues],
+              },
+              minItems: 1,
+              description: 'Which crawler events should be delivered to your webhook',
+            },
+            secret: {
+              type: 'string',
+              description: 'Optional secret mirrored back as the x-convocore-crawler-secret header',
+            },
+            bearerToken: {
+              type: 'string',
+              description: 'Optional bearer token sent as the Authorization header',
+            },
+            headers: {
+              type: 'object',
+              additionalProperties: {
+                type: 'string',
+              },
+              description: 'Optional additional headers to send with each webhook request',
+            },
+          },
+          required: ['url'],
+        },
+      },
+      required: ['workspaceId', 'urls'],
+    },
+  },
+  {
+    name: 'list_crawler_jobs',
+    description: 'List crawler jobs for a workspace with pagination. Crawler jobs are immutable after submission; there is no update tool. Delete and recreate a job if you need different settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler jobs',
+        },
+        page: {
+          type: 'number',
+          description: 'Page number (default: 1)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Results per page (default: 20, max: 100)',
+        },
+      },
+      required: ['workspaceId'],
+    },
+  },
+  {
+    name: 'get_crawler_job',
+    description: 'Get a crawler job by ID, including status, billing estimates, and webhook metadata. Crawler jobs cannot be updated after creation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler job',
+        },
+        jobId: {
+          type: 'string',
+          description: 'The crawler job ID',
+        },
+      },
+      required: ['workspaceId', 'jobId'],
+    },
+  },
+  {
+    name: 'delete_crawler_job',
+    description: 'Delete a crawler job and its stored page data. Since crawler jobs are immutable and cannot be updated, delete plus recreate is the supported workflow for changes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler job',
+        },
+        jobId: {
+          type: 'string',
+          description: 'The crawler job ID to delete',
+        },
+      },
+      required: ['workspaceId', 'jobId'],
+    },
+  },
+  {
+    name: 'list_crawler_job_pages',
+    description: 'List scraped page summaries for a crawler job with pagination. Crawler jobs are immutable after submission and cannot be updated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler job',
+        },
+        jobId: {
+          type: 'string',
+          description: 'The crawler job ID',
+        },
+        page: {
+          type: 'number',
+          description: 'Page number (default: 1)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Results per page (default: 20, max: 100)',
+        },
+      },
+      required: ['workspaceId', 'jobId'],
+    },
+  },
+  {
+    name: 'get_crawler_job_page',
+    description: 'Get a single scraped page for a crawler job, including markdown/html payload when available. Crawler jobs are immutable after submission and cannot be updated.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'The workspace that owns the crawler job',
+        },
+        jobId: {
+          type: 'string',
+          description: 'The crawler job ID',
+        },
+        pageId: {
+          type: 'string',
+          description: 'The scraped page ID',
+        },
+      },
+      required: ['workspaceId', 'jobId', 'pageId'],
+    },
+  },
 ];
 
 // Create MCP server
@@ -1150,6 +1427,106 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_kb_stats': {
         const validated = GetKBStatsSchema.parse(args);
         const result = await client.getKBStats(validated.agentId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      // ==================== CRAWLER HANDLERS ====================
+
+      case 'create_crawler_job': {
+        const validated = CreateCrawlerJobSchema.parse(args);
+        const { workspaceId, ...crawlerJobData } = validated;
+        const result = await client.createCrawlerJob(workspaceId, crawlerJobData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'list_crawler_jobs': {
+        const validated = ListCrawlerJobsSchema.parse(args);
+        const result = await client.listCrawlerJobs(
+          validated.workspaceId,
+          validated.page,
+          validated.limit
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_crawler_job': {
+        const validated = GetCrawlerJobSchema.parse(args);
+        const result = await client.getCrawlerJob(
+          validated.workspaceId,
+          validated.jobId
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'delete_crawler_job': {
+        const validated = DeleteCrawlerJobSchema.parse(args);
+        const result = await client.deleteCrawlerJob(
+          validated.workspaceId,
+          validated.jobId
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'list_crawler_job_pages': {
+        const validated = ListCrawlerJobPagesSchema.parse(args);
+        const result = await client.listCrawlerJobPages(
+          validated.workspaceId,
+          validated.jobId,
+          validated.page,
+          validated.limit
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_crawler_job_page': {
+        const validated = GetCrawlerJobPageSchema.parse(args);
+        const result = await client.getCrawlerJobPage(
+          validated.workspaceId,
+          validated.jobId,
+          validated.pageId
+        );
         return {
           content: [
             {
