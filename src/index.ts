@@ -10,11 +10,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { getConfig } from './config.js';
 import { ConvoCoreClient } from './convocore-client.js';
+import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 
 // Initialize configuration and client
 const config = getConfig();
@@ -241,6 +244,75 @@ const GetCrawlerJobPageSchema = z.object({
   workspaceId: z.string().describe('The workspace that owns the crawler job'),
   jobId: z.string().describe('The crawler job ID'),
   pageId: z.string().describe('The scraped page ID'),
+});
+
+// ==================== FILE I/O SCHEMAS ====================
+// One-of source: { path } | { url } | { data + mimeType? }. Validated at runtime.
+const FileSourceSchema = z.object({
+  path: z.string().optional().describe('Absolute or relative local file path. Mutually exclusive with url/data.'),
+  url: z.string().url().optional().describe('https:// URL to fetch. Mutually exclusive with path/data.'),
+  data: z.string().optional().describe("Base64-encoded file contents (raw or 'data:<mime>;base64,<...>'). Mutually exclusive with path/url."),
+  mimeType: z.string().optional().describe('Optional MIME hint, primarily for the data mode.'),
+});
+
+const InspectFileSchema = FileSourceSchema;
+
+const ReadTextFileSchema = FileSourceSchema.extend({
+  maxBytes: z.number().int().min(1).optional().describe('Optional cap on bytes to read from the file.'),
+});
+
+const ReadPdfSchema = FileSourceSchema.extend({
+  pages: z.union([z.string(), z.array(z.number().int().min(1))]).optional().describe(
+    'Optional page selection. String form like "1-3,5,7-9" or an explicit array of page numbers. Defaults to all pages.',
+  ),
+});
+
+const ReadDocxSchema = FileSourceSchema.extend({
+  asMarkdown: z.boolean().optional().describe('When true, returns markdown (preserves headings, lists, links). Default: false (plain text).'),
+});
+
+const ReadSpreadsheetSchema = FileSourceSchema.extend({
+  sheet: z.union([z.string(), z.number().int().min(0)]).optional().describe(
+    'Sheet name or zero-based index. Omit to just list available sheets without reading any.',
+  ),
+  range: z.string().optional().describe('Optional A1-style range, e.g. "A1:D50".'),
+  format: z.enum(['json', 'csv', 'markdown']).optional().describe('Output format for the sheet (default: markdown).'),
+  headerRow: z.boolean().optional().describe('For json output, treat row 1 as headers (default: true).'),
+  maxRows: z.number().int().min(1).max(50000).optional().describe('Cap on rows returned (default: 1000).'),
+});
+
+const ReadImageSchema = FileSourceSchema.extend({
+  maxDimension: z.number().int().min(64).max(4096).optional().describe(
+    'Max width/height in pixels (default: 2048). Anything larger is downscaled before returning.',
+  ),
+});
+
+const ImportFileToKbSchema = FileSourceSchema.extend({
+  agentId: z.string().describe('Target agent ID whose knowledge base receives the document.'),
+  name: z.string().optional().describe('KB document name. Defaults to the source filename.'),
+  tags: z.array(z.string()).optional().describe('Optional tags applied to the KB doc.'),
+  pages: z.union([z.string(), z.array(z.number().int().min(1))]).optional().describe('PDF only: page selection.'),
+  sheet: z.union([z.string(), z.number().int().min(0)]).optional().describe('Spreadsheet only: which sheet to ingest. Defaults to the first sheet.'),
+  asMarkdown: z.boolean().optional().describe('Prefer markdown output for docx/spreadsheet (default: true).'),
+});
+
+// ==================== WIDGET CSS SCHEMAS ====================
+
+const WidgetCssStylingGuideSchema = z.object({
+  agentId: z.string().optional().describe(
+    "Optional agent ID. If provided, the agent's current customCSS is appended so you can refine/extend instead of duplicating rules."
+  ),
+});
+
+const GetAgentCustomCssSchema = z.object({
+  agentId: z.string().describe('The agent ID whose customCSS field you want to read'),
+});
+
+const UpdateAgentCustomCssSchema = z.object({
+  agentId: z.string().describe('The agent ID whose customCSS field you want to overwrite'),
+  customCSS: z.string().describe(
+    "The full CSS to write to the agent's customCSS field. This REPLACES the existing value entirely — pass the merged CSS, not just a delta. Use an empty string to clear."
+  ),
 });
 
 // Define MCP tools
@@ -1041,6 +1113,220 @@ const tools: Tool[] = [
       required: ['workspaceId', 'jobId', 'pageId'],
     },
   },
+  // ==================== WIDGET CSS TOOLS ====================
+  {
+    name: 'get_widget_css_styling_guide',
+    description:
+      "MUST CALL FIRST whenever the user asks to style/restyle/theme the ConvoCore (vg) chat widget — e.g. 'change the icons to black', 'make the header purple', 'recolor the send button', 'theme the widget dark', 'change the user bubble color', 'restyle the proactive teaser'. " +
+      "Returns the FULL authoritative styling guide (the same SYSTEM_PROMPT used by ConvoCore's server-side AI CSS generator) including: " +
+      "(a) the global output rules (always wrap in ```css, always !important, never invent class names), " +
+      "(b) the CRITICAL compound-element CASCADE rule for color/icon changes (.vg-foo, .vg-foo *, .vg-foo svg, .vg-foo path { color + stroke }), " +
+      "(c) hard constraints (don't color .vg-message-inner-container-human, don't hide the input, etc.), " +
+      "(d) the COMPLETE class & id map (.vg-* selectors for every part of the widget — header, footer input, send button, messages, proactive bubble, notices, cards, voice mode, live agents, etc.), " +
+      "(e) the NextUI/Tailwind color system, and (f) ready-made selector recipes mapping plain-English asks to selectors. " +
+      "If you pass agentId, the agent's current customCSS is appended so the model can refine/extend it instead of duplicating rules. " +
+      "After calling this, generate CSS that strictly follows the guide, then call update_agent_custom_css to persist it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description:
+            "Optional. If provided, the agent's current customCSS is appended to the guide so you can extend/refine the existing rules instead of duplicating them.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_agent_custom_css',
+    description:
+      "Read the agent's current customCSS field (the per-agent CSS override applied to the chat widget). Returns the raw CSS string (empty string if none set). Use this before editing so you can produce a merged result for update_agent_custom_css.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID whose customCSS field you want to read',
+        },
+      },
+      required: ['agentId'],
+    },
+  },
+  // ==================== FILE I/O TOOLS ====================
+  // Universal "understand any file" capability — PDFs, DOCX, XLSX/CSV, TXT/MD/JSON,
+  // and images. Every read tool accepts EXACTLY ONE of: { path } | { url } | { data + mimeType }.
+  // - path: absolute/relative local path (best in Cursor / Claude Code).
+  // - url:  https URL (works in any host, including Claude Desktop).
+  // - data: base64-encoded bytes the LLM already has (useful when the user
+  //         attached a file to the chat and the host re-encoded it).
+  // Heavy parsers (sharp, pdf-parse, mammoth, xlsx) are loaded lazily on first
+  // use, so the MCP server itself starts in <100ms.
+  {
+    name: 'inspect_file',
+    description:
+      "Cheap probe of a file (path / url / base64). Returns kind, mime, size, page count (PDF), sheet names (XLSX), line count (text), or pixel dimensions (image), plus an estimated token cost. ALWAYS call this first on anything larger than a few KB — use it to decide which read_* tool to call and which slice (pages / sheet / range) to request, so you don't blow the context window.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Local file path. Mutually exclusive with url/data.' },
+        url: { type: 'string', description: 'https:// URL. Mutually exclusive with path/data.' },
+        data: { type: 'string', description: 'Base64 file contents. Mutually exclusive with path/url.' },
+        mimeType: { type: 'string', description: 'Optional MIME hint (mostly for `data` mode).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_text_file',
+    description:
+      "Read a plain-text file (.txt, .md, .json, .csv, .yaml, .log, code, etc.) from path / url / base64. Returns UTF-8 text plus a truncation flag and token estimate. Honors an optional `maxBytes` cap. For .docx use read_docx, for .pdf use read_pdf, for .xlsx use read_spreadsheet.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        maxBytes: { type: 'number', description: 'Optional cap on bytes to read.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_pdf',
+    description:
+      "Extract text from a PDF (path / url / base64). Page-aware: pass `pages` as a string range like \"1-3,5,7-9\" or an explicit array to read only the pages you need. Output is split per page with `--- page N ---` headers. Auto-truncates if the result would exceed the per-call token budget. Always inspect_file first to learn totalPages.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        pages: {
+          oneOf: [
+            { type: 'string', description: 'Range spec like "1-3,5,7-9".' },
+            { type: 'array', items: { type: 'number', minimum: 1 } },
+          ],
+          description: 'Optional page selection. Defaults to all pages.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_docx',
+    description:
+      "Extract text from a .docx Word document (path / url / base64). Set asMarkdown=true to preserve headings, lists, links and bold/italic. Legacy .doc is NOT supported — convert to .docx first.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        asMarkdown: { type: 'boolean', description: 'Return markdown instead of plain text. Default: false.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_spreadsheet',
+    description:
+      "Read an Excel (.xlsx / .xlsm / .xls) or CSV file. Two-step pattern: (1) call WITHOUT `sheet` to list sheet names, (2) call again with `sheet` to read that sheet. Optional A1-style `range` (e.g. \"A1:D50\") and `format` ('markdown' default, or 'csv' / 'json'). headerRow=true (default) treats row 1 as keys when format='json'.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        sheet: {
+          oneOf: [{ type: 'string' }, { type: 'number', minimum: 0 }],
+          description: 'Sheet name or zero-based index. Omit to just list sheets.',
+        },
+        range: { type: 'string', description: 'Optional A1 range like "A1:D50".' },
+        format: { type: 'string', enum: ['json', 'csv', 'markdown'], description: 'Output format. Default: markdown.' },
+        headerRow: { type: 'boolean', description: 'For json: treat row 1 as headers (default: true).' },
+        maxRows: { type: 'number', description: 'Cap on rows returned (default: 1000, max: 50000).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'read_image',
+    description:
+      "Load an image (PNG / JPEG / WebP / GIF / SVG / TIFF / BMP / HEIC) from path / url / base64 and return it as a vision-ready MCP image content block. Auto-normalizes: rasterizes SVG, downscales anything larger than maxDimension (default 2048px), and re-encodes to PNG (or JPEG when needed for size). Vision-capable hosts (Claude Desktop, Claude Code, GPT clients) will see the image natively. Use this for screenshots of bugs, widget previews, mockups, diagrams, scanned receipts, etc.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        maxDimension: {
+          type: 'number',
+          description: 'Max width/height in pixels (default: 2048, range: 64-4096). Larger images are downscaled.',
+          minimum: 64,
+          maximum: 4096,
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'import_file_to_kb',
+    description:
+      "End-to-end shortcut: read any supported file (PDF / DOCX / XLSX / CSV / TXT / MD / JSON / HTML) and create a Knowledge Base document on the target agent in one call. The file is parsed locally to text/markdown and pushed to the agent's KB via create_kb_doc with sourceType='doc'. Use `pages` for PDFs and `sheet` for spreadsheets to control what gets ingested. Images are NOT supported here (they need OCR or vision — use read_image instead).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'Target agent ID.' },
+        path: { type: 'string' },
+        url: { type: 'string' },
+        data: { type: 'string' },
+        mimeType: { type: 'string' },
+        name: { type: 'string', description: 'KB document name. Defaults to the source filename.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+        pages: {
+          oneOf: [
+            { type: 'string', description: 'PDF page range like "1-3,5".' },
+            { type: 'array', items: { type: 'number', minimum: 1 } },
+          ],
+          description: 'PDF only: page selection.',
+        },
+        sheet: {
+          oneOf: [{ type: 'string' }, { type: 'number', minimum: 0 }],
+          description: 'Spreadsheet only: which sheet to ingest (default: first).',
+        },
+        asMarkdown: { type: 'boolean', description: 'Prefer markdown output (default: true).' },
+      },
+      required: ['agentId'],
+    },
+  },
+  {
+    name: 'update_agent_custom_css',
+    description:
+      "Overwrite the agent's customCSS field with new CSS that styles the chat widget. IMPORTANT: this REPLACES the existing customCSS value — always pass the FULL merged CSS (existing + your new rules), not just the delta. " +
+      "Workflow: (1) call get_widget_css_styling_guide to load selectors + rules, (2) optionally call get_agent_custom_css to read what's already there, (3) generate the merged CSS following the guide, (4) call this tool to persist. " +
+      "Pass an empty string to clear all customCSS for the agent.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID whose customCSS field you want to overwrite',
+        },
+        customCSS: {
+          type: 'string',
+          description:
+            'The full CSS to write to the agent.customCSS field. REPLACES the existing value entirely. Use an empty string to clear.',
+        },
+      },
+      required: ['agentId', 'customCSS'],
+    },
+  },
 ];
 
 // Create MCP server
@@ -1052,6 +1338,7 @@ const server = new Server(
   {
     capabilities: {
       tools: {},
+      prompts: {},
     },
   }
 );
@@ -1059,6 +1346,83 @@ const server = new Server(
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
+});
+
+// ==================== MCP PROMPTS ====================
+// Exposes the widget CSS system prompt as a user-invocable prompt so MCP
+// clients (e.g. Claude Desktop, Cursor) can run it via slash command.
+
+const PROMPTS = [
+  {
+    name: 'generate_widget_css',
+    description:
+      "Load the full ConvoCore (vg) chat-widget CSS styling guide as a system message — includes the cascade rule, the complete .vg-* class/id map, hard constraints, the NextUI/Tailwind color system, and selector recipes. Use this whenever you want the assistant to generate or refine CSS for the chat widget. Optionally pass agentId to inject the agent's current customCSS into the context.",
+    arguments: [
+      {
+        name: 'agentId',
+        description:
+          "Optional agent ID. If provided, the agent's existing customCSS is appended to the prompt so you can refine instead of duplicating rules.",
+        required: false,
+      },
+      {
+        name: 'request',
+        description:
+          "Optional plain-English styling request to seed the conversation, e.g. 'change the icons to black' or 'theme the widget dark purple'.",
+        required: false,
+      },
+    ],
+  },
+] as const;
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => {
+  return { prompts: PROMPTS };
+});
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  if (name !== 'generate_widget_css') {
+    throw new Error(`Unknown prompt: ${name}`);
+  }
+
+  const agentId = typeof args?.agentId === 'string' ? args.agentId : undefined;
+  const userRequest = typeof args?.request === 'string' ? args.request : undefined;
+
+  let currentCSS: string | undefined;
+  if (agentId) {
+    try {
+      currentCSS = await client.getAgentCustomCSS(agentId);
+    } catch {
+      currentCSS = undefined;
+    }
+  }
+
+  const messages: Array<{ role: 'user' | 'assistant'; content: { type: 'text'; text: string } }> = [
+    {
+      role: 'user',
+      content: {
+        type: 'text',
+        text: buildWidgetCssPrompt(currentCSS),
+      },
+    },
+  ];
+
+  if (userRequest && userRequest.trim().length > 0) {
+    messages.push({
+      role: 'user',
+      content: {
+        type: 'text',
+        text: userRequest,
+      },
+    });
+  }
+
+  return {
+    description: agentId
+      ? `Widget CSS styling guide for agent ${agentId}`
+      : 'Widget CSS styling guide',
+    messages,
+  };
 });
 
 // Handle tool calls
@@ -1526,6 +1890,233 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validated.workspaceId,
           validated.jobId,
           validated.pageId
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      // ==================== WIDGET CSS HANDLERS ====================
+
+      case 'get_widget_css_styling_guide': {
+        const validated = WidgetCssStylingGuideSchema.parse(args);
+        let currentCSS: string | undefined;
+        if (validated.agentId) {
+          try {
+            currentCSS = await client.getAgentCustomCSS(validated.agentId);
+          } catch {
+            // Non-fatal — return the base guide if we can't fetch the agent
+            currentCSS = undefined;
+          }
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: buildWidgetCssPrompt(currentCSS),
+            },
+          ],
+        };
+      }
+
+      case 'get_agent_custom_css': {
+        const validated = GetAgentCustomCssSchema.parse(args);
+        const css = await client.getAgentCustomCSS(validated.agentId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                { agentId: validated.agentId, customCSS: css, length: css.length },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      // ==================== FILE I/O HANDLERS ====================
+      // file-readers is dynamic-imported so the heavy parsers (sharp / pdf-parse /
+      // mammoth / xlsx) never load until a file tool is actually called.
+
+      case 'inspect_file': {
+        const validated = InspectFileSchema.parse(args);
+        const { inspectFile } = await import('./file-readers.js');
+        const result = await inspectFile(validated);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'read_text_file': {
+        const validated = ReadTextFileSchema.parse(args);
+        const { maxBytes, ...src } = validated;
+        const { readTextFile } = await import('./file-readers.js');
+        const result = await readTextFile(src, maxBytes);
+        return {
+          content: [
+            { type: 'text', text: result.text },
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  truncated: result.truncated,
+                  totalBytes: result.totalBytes,
+                  estimatedTokens: result.estimatedTokens,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'read_pdf': {
+        const validated = ReadPdfSchema.parse(args);
+        const { pages, ...src } = validated;
+        const { readPdf } = await import('./file-readers.js');
+        const result = await readPdf(src, pages);
+        return {
+          content: [
+            { type: 'text', text: result.text },
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  totalPages: result.totalPages,
+                  pagesReturned: result.pagesReturned,
+                  truncated: result.truncated,
+                  estimatedTokens: result.estimatedTokens,
+                  info: result.info,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'read_docx': {
+        const validated = ReadDocxSchema.parse(args);
+        const { asMarkdown, ...src } = validated;
+        const { readDocx } = await import('./file-readers.js');
+        const result = await readDocx(src, asMarkdown);
+        return {
+          content: [
+            { type: 'text', text: result.text },
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  format: result.format,
+                  truncated: result.truncated,
+                  estimatedTokens: result.estimatedTokens,
+                  warnings: result.warnings.slice(0, 10),
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'read_spreadsheet': {
+        const validated = ReadSpreadsheetSchema.parse(args);
+        const { sheet, range, format, headerRow, maxRows, ...src } = validated;
+        const { readSpreadsheet } = await import('./file-readers.js');
+        const result = await readSpreadsheet(src, { sheet, range, format, headerRow, maxRows });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'read_image': {
+        const validated = ReadImageSchema.parse(args);
+        const { maxDimension, ...src } = validated;
+        const { readImage } = await import('./file-readers.js');
+        const result = await readImage(src, { maxDimension });
+        // Native MCP image content block — vision-capable hosts render it inline.
+        return {
+          content: [
+            {
+              type: 'image',
+              data: result.base64,
+              mimeType: result.mimeType,
+            },
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  width: result.width,
+                  height: result.height,
+                  mimeType: result.mimeType,
+                  sizeBytes: result.sizeBytes,
+                  normalized: result.normalized,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'import_file_to_kb': {
+        const validated = ImportFileToKbSchema.parse(args);
+        const { agentId, name, tags, pages, sheet, asMarkdown, ...src } = validated;
+        const { extractToText } = await import('./file-readers.js');
+        const extracted = await extractToText(src, { pages, sheet, asMarkdown });
+        const docName = name || extracted.name || 'Imported document';
+        const kb = await client.createKBDoc(agentId, {
+          name: docName,
+          sourceType: 'doc',
+          content: extracted.text,
+          tags,
+          metadata: {
+            origin: extracted.origin,
+            kind: extracted.kind,
+            mimeType: extracted.mimeType,
+            ...extracted.meta,
+            importedAt: new Date().toISOString(),
+          },
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  imported: {
+                    agentId,
+                    docName,
+                    kind: extracted.kind,
+                    estimatedTokens: extracted.estimatedTokens,
+                    truncated: extracted.truncated,
+                  },
+                  kbResponse: kb,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'update_agent_custom_css': {
+        const validated = UpdateAgentCustomCssSchema.parse(args);
+        const result = await client.updateAgentCustomCSS(
+          validated.agentId,
+          validated.customCSS,
         );
         return {
           content: [

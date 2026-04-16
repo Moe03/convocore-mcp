@@ -156,6 +156,24 @@ export class ConvoCoreClient {
   }
 
   /**
+   * Get the agent's current customCSS string (the widget styling override).
+   * Returns an empty string if the field is not set.
+   */
+  async getAgentCustomCSS(agentId: string): Promise<string> {
+    const result = await this.getAgent(agentId);
+    const agent: any = (result as any)?.data ?? result;
+    const css = agent?.customCSS;
+    return typeof css === 'string' ? css : '';
+  }
+
+  /**
+   * Replace the agent's customCSS field. Pass an empty string to clear it.
+   */
+  async updateAgentCustomCSS(agentId: string, customCSS: string): Promise<ApiResponse<Agent>> {
+    return this.updateAgent(agentId, { agent: { customCSS } });
+  }
+
+  /**
    * Get agent usage/credits
    */
   async getAgentUsage(
