@@ -2,6 +2,7 @@
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **29 tools** for agents, conversations, knowledge bases, and crawler jobs.
 
+[![npm version](https://img.shields.io/npm/v/convocore-mcp.svg)](https://www.npmjs.com/package/convocore-mcp)
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -34,7 +35,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 
 ## How it runs (transport and lifecycle)
 
-1. The **host** (Claude Desktop, Cursor, etc.) starts the server as a subprocess: e.g. `docker run …` or `node dist/index.js`.
+1. The **host** (Claude Desktop, Cursor, etc.) starts the server as a subprocess: e.g. `npx -y convocore-mcp`, `docker run …`, or `node dist/index.js`.
 2. Communication uses **`StdioServerTransport`**: JSON-RPC messages on stdin/stdout. **Do not** write logs to stdout; the server logs to **stderr** (e.g. `ConvoCore MCP Server running on stdio`).
 3. On startup, `getConfig()` reads env vars. If `WORKSPACE_SECRET` is missing, the process **throws** and exits.
 4. The host sends `tools/list` and `tools/call`. Each call is validated, then `ConvoCoreClient` performs `fetch()` to the REST API.
@@ -58,8 +59,8 @@ flowchart LR
 | `src/convocore-client.ts` | HTTP client: paths, methods, query strings, JSON bodies |
 | `src/config.ts` | `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, resolved `baseUrl` |
 | `src/types.ts` | Shared TypeScript types for config and agent payloads |
-| `dist/` | Compiled output (`pnpm run build` / `tsc`) |
-| `Dockerfile` | Multi-stage image: build with pnpm, run `node dist/index.js` |
+| `dist/` | Compiled output (`pnpm run build` / `tsc`) — what npm publishes |
+| `Dockerfile` | Multi-stage image: build with pnpm, run `node dist/index.js` (alternative distribution) |
 | `docker-compose.yml` | Example service (see [Docker Compose note](#docker-compose)) |
 | `claude_desktop_config.example.json` | Sample Claude Desktop MCP entry |
 | `openapi.json` | OpenAPI spec (reference for API shape) |
@@ -104,21 +105,32 @@ Non-OK responses: body is parsed as JSON; `message` is thrown as an error when p
 
 - A ConvoCore **workspace secret** (`WORKSPACE_SECRET`).
 - Optional: correct **region** (`eu-gcp` / `na-gcp`).
-- **Docker** (for container workflow) or **Node.js 20+** and **pnpm** (for local build).
+- **Node.js 20+** (ships with `npx`). Docker is optional and only needed for the container workflow.
 
-### Option A: Docker (recommended)
+### Option A: npx (recommended)
+
+You don't have to install anything. Your MCP host (Claude Desktop, Cursor, etc.) runs the server on demand:
 
 ```bash
-docker run -d \
-  --name convocore-mcp \
+npx -y convocore-mcp
+```
+
+Set `WORKSPACE_SECRET` (and optionally `CONVOCORE_API_REGION`) in the host's `env` block — see the [Claude Desktop example](#claude-desktop) below.
+
+The first invocation downloads the package (a few seconds); subsequent runs are cached by npm.
+
+### Option B: Docker
+
+```bash
+docker run -i --rm \
   -e WORKSPACE_SECRET="your_workspace_secret_here" \
   -e CONVOCORE_API_REGION="eu-gcp" \
   moe003/convocore-mcp:latest
 ```
 
-For MCP hosts you usually use `docker run -i --rm` **without** `-d` so stdin stays open (see Claude example below).
+`-i` keeps stdin open so the MCP host can speak JSON-RPC to the container.
 
-### Option B: Local Node (pnpm)
+### Option C: Local Node (development)
 
 ```bash
 git clone https://github.com/moe003/convocore-mcp.git
@@ -142,7 +154,43 @@ Config path:
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
-**Docker** (pull image first to avoid first-run timeout):
+**npx (recommended):**
+
+```json
+{
+  "mcpServers": {
+    "convocore": {
+      "command": "npx",
+      "args": ["-y", "convocore-mcp"],
+      "env": {
+        "WORKSPACE_SECRET": "your_workspace_secret_here",
+        "CONVOCORE_API_REGION": "eu-gcp"
+      }
+    }
+  }
+}
+```
+
+> **Windows note:** if Claude Desktop fails to spawn `npx` directly, wrap it with `cmd`:
+>
+> ```json
+> {
+>   "mcpServers": {
+>     "convocore": {
+>       "command": "cmd",
+>       "args": ["/c", "npx", "-y", "convocore-mcp"],
+>       "env": {
+>         "WORKSPACE_SECRET": "your_workspace_secret_here",
+>         "CONVOCORE_API_REGION": "eu-gcp"
+>       }
+>     }
+>   }
+> }
+> ```
+
+After saving the config, **fully quit and relaunch Claude Desktop**. The `convocore` server should appear in the MCP server list and the tools become available in chat.
+
+**Docker (alternative):** pull the image first to avoid first-run timeout in the host:
 
 ```bash
 docker pull moe003/convocore-mcp:latest
@@ -157,7 +205,6 @@ docker pull moe003/convocore-mcp:latest
         "run",
         "-i",
         "--rm",
-        "--pull", "always",
         "-e", "WORKSPACE_SECRET=your_workspace_secret_here",
         "-e", "CONVOCORE_API_REGION=eu-gcp",
         "moe003/convocore-mcp:latest"
@@ -167,7 +214,7 @@ docker pull moe003/convocore-mcp:latest
 }
 ```
 
-**Local Node** (use an absolute path to `dist/index.js`):
+**Local Node (development):** use an absolute path to `dist/index.js`:
 
 ```json
 {
@@ -186,7 +233,7 @@ docker pull moe003/convocore-mcp:latest
 
 ### Cursor and other clients
 
-Any client that supports **stdio** MCP servers can use the same `command` + `args` + `env` pattern as above. Point `command`/`args` at Docker or `node …/dist/index.js` and set the same environment variables.
+Any client that supports **stdio** MCP servers can use the same `command` + `args` + `env` pattern as above. The recommended `command`/`args` is `npx` + `["-y", "convocore-mcp"]`; Docker and local Node also work. Set the same environment variables.
 
 ---
 
@@ -378,12 +425,23 @@ The included `docker-compose.yml` runs the image with **stdin open** for MCP-sty
 | Command | Action |
 |---------|--------|
 | `pnpm install` | Install dependencies |
-| `pnpm run build` | Run `tsc` → `dist/` |
+| `pnpm run build` | Run `tsc` → `dist/` and chmod the bin |
 | `pnpm run dev` | `tsc --watch` |
 
-Dependencies: `@modelcontextprotocol/sdk`, `zod`. Dev: `typescript`, `@types/node`.
+Dependencies: `@modelcontextprotocol/sdk`, `zod`, plus file-reader stack (`mammoth`, `pdf-parse`, `xlsx`, `sharp`, `mime-types`). Dev: `typescript`, `@types/node`, `shx`.
 
-Push image (maintainers):
+### Publish to npm (maintainers)
+
+```bash
+pnpm install
+pnpm run build
+pnpm pack --dry-run     # sanity check the tarball
+pnpm publish --access public
+```
+
+`prepublishOnly` re-runs the build automatically. Only `dist/`, `README.md`, and `LICENSE` are shipped (controlled by the `files` field in `package.json`).
+
+### Push Docker image (maintainers)
 
 ```bash
 docker push moe003/convocore-mcp:latest
@@ -403,6 +461,7 @@ MIT License — see the `LICENSE` file.
 
 - [ConvoCore API / product docs](https://convocore.ai/docs)
 - [Model Context Protocol](https://modelcontextprotocol.io)
+- [npm — convocore-mcp](https://www.npmjs.com/package/convocore-mcp)
 - [Docker Hub — moe003/convocore-mcp](https://hub.docker.com/r/moe003/convocore-mcp)
 - [Issues](https://github.com/moe003/convocore-mcp/issues)
 - [ConvoCore support](https://convocore.ai/support)

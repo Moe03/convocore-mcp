@@ -1,20 +1,44 @@
 {
-  "name": "convocore-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP Server for ConvoCore AI Agents - Full CRUD operations",
+  "name": "convocore-mcp",
+  "version": "2.0.0",
+  "description": "MCP Server for ConvoCore AI Agents - run via npx in Claude Desktop, Cursor, and any MCP-compatible host",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "convocore-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && shx chmod +x dist/index.js",
     "dev": "tsc --watch",
-    "prepare": "npm run build"
+    "prepublishOnly": "pnpm run build"
   },
   "keywords": [
     "mcp",
     "convocore",
     "ai-agents",
-    "model-context-protocol"
+    "model-context-protocol",
+    "claude",
+    "cursor",
+    "npx"
   ],
+  "author": "moe003",
+  "license": "MIT",
+  "homepage": "https://github.com/moe003/convocore-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/moe003/convocore-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moe003/convocore-mcp.git"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "mammoth": "^1.12.0",
@@ -27,6 +51,7 @@
   "devDependencies": {
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.10.2",
+    "shx": "^0.3.4",
     "typescript": "^5.7.2"
   },
   "pnpm": {
