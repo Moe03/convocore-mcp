@@ -15,9 +15,14 @@ import {
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getConfig } from './config.js';
 import { ConvoCoreClient } from './convocore-client.js';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
+import { PRICING, VOICE_PROVIDERS } from './pricing.js';
+
+const execAsync = promisify(exec);
 
 // Initialize configuration and client
 const config = getConfig();
@@ -313,6 +318,158 @@ const UpdateAgentCustomCssSchema = z.object({
   customCSS: z.string().describe(
     "The full CSS to write to the agent's customCSS field. This REPLACES the existing value entirely — pass the merged CSS, not just a delta. Use an empty string to clear."
   ),
+});
+
+const SleepSchema = z.object({
+  seconds: z
+    .number()
+    .min(0)
+    .max(300)
+    .describe('Number of seconds to wait. Must be between 0 and 300 (5 minutes).'),
+});
+
+const VoiceFiltersBase = {
+  language: z
+    .string()
+    .optional()
+    .describe('Inclusive match: "en" matches "en-US", "en-GB", "English", etc.'),
+  gender: z
+    .string()
+    .optional()
+    .describe('male / female / neutral. Aliases m / f / masculine / feminine accepted (case-insensitive).'),
+  accent: z
+    .string()
+    .optional()
+    .describe('Case-insensitive substring match, e.g. "american" or "british".'),
+  modelId: z
+    .string()
+    .optional()
+    .describe('Filter to a specific TTS model id (e.g. "aura-2", "eleven_multilingual_v2") for providers with model-scoped voice catalogs.'),
+  limit: z.number().min(1).max(500).optional().default(100).describe('Page size, 1–500. Default 100.'),
+  offset: z.number().min(0).optional().default(0).describe('Pagination offset. Default 0.'),
+};
+
+const ListVoiceProvidersSchema = z.object({});
+
+const ListVoiceModelsSchema = z.object({
+  provider: z
+    .string()
+    .describe('Provider slug — one of: elevenlabs, deepgram, cartesia, rime-ai, openai, google-cloud, google-live, ultravox, minimax, playht, azure.'),
+});
+
+const SearchVoicesSchema = z.object({
+  ...VoiceFiltersBase,
+  providers: z
+    .string()
+    .optional()
+    .describe('Comma-separated provider slugs to limit the search (e.g. "elevenlabs,cartesia"). Omit to search all providers.'),
+});
+
+const ListProviderVoicesSchema = z.object({
+  provider: z
+    .string()
+    .describe('Provider slug to browse, e.g. "elevenlabs" or "cartesia".'),
+  ...VoiceFiltersBase,
+});
+
+const GetVoiceSchema = z.object({
+  provider: z.string().describe('Provider slug, e.g. "elevenlabs".'),
+  voiceId: z
+    .string()
+    .describe('The provider-specific voice ID (e.g. "21m00Tcm4TlvDq8ikWAM" for ElevenLabs Rachel).'),
+});
+
+const BuyTwilioNumberSchema = z.object({
+  number: z
+    .string()
+    .describe('The phone number to buy in E.164 format with the leading + and no spaces, e.g. "+14155551234".'),
+  agentId: z
+    .string()
+    .optional()
+    .describe('Optional agent ID to assign the number to. Leave empty to assign later.'),
+  capabilities: z
+    .array(z.enum(['voice', 'sms']))
+    .optional()
+    .default(['voice', 'sms'])
+    .describe('Which capabilities to enable. Default: ["voice", "sms"].'),
+});
+
+const ImportTwilioNumberSchema = z.object({
+  payload: z
+    .record(z.any())
+    .describe(
+      'Body for /utils/import-twilio-number. Typically includes your Twilio account SID, auth token, the number to import, optional agentId, and capabilities. Pass the full request body as an object.'
+    ),
+});
+
+const ReleaseTwilioNumberSchema = z.object({
+  payload: z
+    .record(z.any())
+    .describe(
+      'Body for /utils/twilio/release-number. Typically includes the phoneNumber or phoneNumberSid to release. Pass the full request body as an object.'
+    ),
+});
+
+const CheckTwilioNumberSchema = z.object({
+  payload: z
+    .record(z.any())
+    .describe(
+      'Body for /utils/twilio/check-number. Used to repair / re-sync the Twilio webhook configuration for a number. Typically includes the phoneNumber or phoneNumberSid.'
+    ),
+});
+
+const SyncSmsTwilioNumberSchema = z.object({
+  payload: z
+    .record(z.any())
+    .describe(
+      'Body for /utils/twilio/sync-sms. Assigns a Twilio number to an agent for SMS handling. Typically includes phoneNumber (or sid) and agentId.'
+    ),
+});
+
+const PricingSection = z.enum([
+  'all',
+  'plans',
+  'add_ons',
+  'credits',
+  'rules_of_thumb',
+  'models',
+  'voice_providers',
+  'faq',
+]);
+
+const GetPricingInfoSchema = z.object({
+  section: PricingSection
+    .optional()
+    .default('all')
+    .describe(
+      'Which slice of pricing to return. "all" returns the full snapshot. Use a section to keep responses small when you only need plans, models, etc.'
+    ),
+  modelFilter: z
+    .string()
+    .optional()
+    .describe(
+      'Optional substring match on model name or provider when section="models" (e.g. "gpt", "claude", "gemini").'
+    ),
+});
+
+const RunCommandSchema = z.object({
+  command: z
+    .string()
+    .min(1)
+    .describe(
+      'Shell command to execute on the host machine. Runs through the platform default shell (cmd.exe on Windows, /bin/sh on Unix). Inherits the MCP server process environment.'
+    ),
+  cwd: z
+    .string()
+    .optional()
+    .describe('Optional working directory to run the command in. Defaults to the MCP server cwd.'),
+  timeoutSeconds: z
+    .number()
+    .min(1)
+    .max(600)
+    .optional()
+    .default(30)
+    .describe('Kill the process after this many seconds. Default 30, max 600.'),
 });
 
 // Define MCP tools
@@ -1327,13 +1484,226 @@ const tools: Tool[] = [
       required: ['agentId', 'customCSS'],
     },
   },
+  {
+    name: 'sleep',
+    description:
+      'Pause for the given number of seconds and then return. Useful when you need to wait between actions (e.g. polling a job, rate-limiting, giving an external system time to settle). Range: 0–300 seconds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        seconds: {
+          type: 'number',
+          minimum: 0,
+          maximum: 300,
+          description: 'How long to wait, in seconds (0–300).',
+        },
+      },
+      required: ['seconds'],
+    },
+  },
+  {
+    name: 'run_command',
+    description:
+      'Execute a shell command on the host machine where the MCP server is running and return stdout, stderr, and the exit code. ' +
+      'Runs through the platform default shell (cmd.exe on Windows, /bin/sh on Unix). ' +
+      'Use for simple system tasks like checking versions, listing files, or running short scripts. ' +
+      'NOTE: this tool has full access to the host shell with the MCP process privileges — only run commands you trust.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The shell command to execute (e.g. "node --version" or "ls -la").',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Optional working directory. Defaults to the MCP server cwd.',
+        },
+        timeoutSeconds: {
+          type: 'number',
+          minimum: 1,
+          maximum: 600,
+          description: 'Kill the process after this many seconds. Default 30, max 600.',
+        },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'list_voice_providers',
+    description:
+      'List every TTS voice provider Convocore supports (elevenlabs, deepgram, cartesia, rime-ai, openai, google-cloud, google-live (Gemini Live), ultravox, minimax, playht, azure). ' +
+      "For each provider returns the workspace secret-key name (e.g. ELEVENLABS_API_KEY) and a `requiresWorkspaceApiKey` flag indicating whether the platform has a server-side fallback or the workspace must BYOK. " +
+      'Read-only — does NOT consume credits.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_voice_models',
+    description:
+      'List the available TTS models for a given provider (e.g. "aura-2" for Deepgram, "eleven_multilingual_v2" for ElevenLabs). ' +
+      'Use the returned modelId values with `search_voices` / `list_provider_voices` to filter the catalog. Read-only — does NOT consume credits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        provider: {
+          type: 'string',
+          description: 'Provider slug, e.g. "elevenlabs", "deepgram", "cartesia", "openai", "google-cloud", "azure".',
+        },
+      },
+      required: ['provider'],
+    },
+  },
+  {
+    name: 'search_voices',
+    description:
+      'Unified voice search across one or more TTS providers. Every result is normalized to { voiceId, name, provider, previewUrl, filters: { accent, gender, useCase, language } }. ' +
+      'Use this when the user asks for a voice by gender / language / accent without caring which provider. Read-only — does NOT consume credits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        language: { type: 'string', description: 'Inclusive match: "en" matches "en-US", "en-GB", "English". Use BCP-47 codes or English names.' },
+        gender: { type: 'string', description: 'male / female / neutral. Aliases m / f / masculine / feminine accepted.' },
+        accent: { type: 'string', description: 'Substring match, e.g. "american", "british".' },
+        modelId: { type: 'string', description: 'Filter to a specific TTS model id when relevant.' },
+        providers: { type: 'string', description: 'Comma-separated provider slugs to limit the search (e.g. "elevenlabs,cartesia"). Omit for all providers.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Page size, 1–500. Default 100.' },
+        offset: { type: 'number', minimum: 0, description: 'Pagination offset. Default 0.' },
+      },
+    },
+  },
+  {
+    name: 'list_provider_voices',
+    description:
+      'Browse the voice catalog for ONE specific provider with the same filter params as search_voices. Use when the user has already chosen a provider (e.g. "show me ElevenLabs male British voices"). Read-only — does NOT consume credits.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', description: 'Provider slug, e.g. "elevenlabs".' },
+        language: { type: 'string', description: 'Language filter (e.g. "en", "de").' },
+        gender: { type: 'string', description: 'male / female / neutral.' },
+        accent: { type: 'string', description: 'Substring match (e.g. "american").' },
+        modelId: { type: 'string', description: 'Filter to a specific TTS model id.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Page size, 1–500. Default 100.' },
+        offset: { type: 'number', minimum: 0, description: 'Pagination offset. Default 0.' },
+      },
+      required: ['provider'],
+    },
+  },
+  {
+    name: 'get_voice',
+    description:
+      "Fetch full metadata + a preview MP3 URL for a single voice. Use after the user picks one from search_voices / list_provider_voices, or when they paste a voice ID. Read-only — does NOT consume credits.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', description: 'Provider slug, e.g. "elevenlabs".' },
+        voiceId: { type: 'string', description: 'Provider-specific voice ID (e.g. "21m00Tcm4TlvDq8ikWAM" for ElevenLabs Rachel).' },
+      },
+      required: ['provider', 'voiceId'],
+    },
+  },
+  {
+    name: 'buy_twilio_number',
+    description:
+      "Purchase a new Twilio phone number from Convocore's Twilio account and assign it to the workspace. " +
+      'Requires an available phone-number slot on your plan (Twilio Phone Number add-on is $3/month per extra number). ' +
+      'Tip: discover purchasable numbers via the platform UI / available-numbers endpoint before calling this.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        number: {
+          type: 'string',
+          description: 'Phone number in E.164 (e.g. "+14155551234"). Leading + required, no spaces.',
+        },
+        agentId: { type: 'string', description: 'Optional agent ID to assign the number to. Leave empty to assign later.' },
+        capabilities: {
+          type: 'array',
+          items: { type: 'string', enum: ['voice', 'sms'] },
+          description: 'Which capabilities to enable. Default: ["voice", "sms"].',
+        },
+      },
+      required: ['number'],
+    },
+  },
+  {
+    name: 'import_twilio_number',
+    description:
+      'Import a Twilio number you already own into the workspace (uses your Twilio account credentials). ' +
+      'Pass the full request body for /utils/import-twilio-number as an object — typically includes your Twilio account SID, auth token, the phone number, optional agentId and capabilities.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Full request body object for /utils/import-twilio-number.' },
+      },
+      required: ['payload'],
+    },
+  },
+  {
+    name: 'release_twilio_number',
+    description:
+      'Release (delete) a Twilio number from the workspace. Pass the full request body for /utils/twilio/release-number as an object — typically includes phoneNumber or phoneNumberSid.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Full request body object for /utils/twilio/release-number.' },
+      },
+      required: ['payload'],
+    },
+  },
+  {
+    name: 'check_twilio_number',
+    description:
+      'Repair / re-sync the Twilio webhook configuration for a number (useful when call routing breaks). ' +
+      'Pass the full request body for /utils/twilio/check-number as an object — typically includes phoneNumber or phoneNumberSid.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Full request body object for /utils/twilio/check-number.' },
+      },
+      required: ['payload'],
+    },
+  },
+  {
+    name: 'sync_sms_twilio_number',
+    description:
+      'Assign a Twilio number to an agent for SMS handling. Pass the full request body for /utils/twilio/sync-sms as an object — typically includes phoneNumber (or sid) and agentId.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        payload: { type: 'object', description: 'Full request body object for /utils/twilio/sync-sms.' },
+      },
+      required: ['payload'],
+    },
+  },
+  {
+    name: 'get_pricing_info',
+    description:
+      'Return Convocore pricing information so the assistant can quote plans, add-ons, voice/chat cost rules of thumb, credit conversions, and per-model token prices to the user. ' +
+      'Use `section` to narrow the response: "plans", "add_ons", "credits", "rules_of_thumb", "models", "voice_providers", "faq", or "all" (default). ' +
+      'When section="models", optionally pass `modelFilter` (substring match on model name or provider, e.g. "gpt", "claude") to only return matching rows. ' +
+      'Static knowledge — does NOT hit the API and does NOT consume credits. Always remind users that prices may change and direct them to https://convocore.ai/pricing for the live numbers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: {
+          type: 'string',
+          enum: ['all', 'plans', 'add_ons', 'credits', 'rules_of_thumb', 'models', 'voice_providers', 'faq'],
+          description: 'Which slice of pricing to return. Default: "all".',
+        },
+        modelFilter: {
+          type: 'string',
+          description: 'Optional substring match (model name or provider) when section="models". E.g. "gpt", "claude", "gemini".',
+        },
+      },
+    },
+  },
 ];
 
 // Create MCP server
 const server = new Server(
   {
-    name: 'convocore-mcp-server',
-    version: '1.0.0',
+    name: 'convocore-mcp',
+    version: '2.2.0',
   },
   {
     capabilities: {
@@ -2125,6 +2495,235 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify(result, null, 2),
             },
           ],
+        };
+      }
+
+      case 'sleep': {
+        const { seconds } = SleepSchema.parse(args);
+        const start = Date.now();
+        await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+        const elapsedMs = Date.now() - start;
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                { sleptSeconds: seconds, elapsedMs },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'run_command': {
+        const validated = RunCommandSchema.parse(args);
+        const timeoutMs = (validated.timeoutSeconds ?? 30) * 1000;
+        try {
+          const { stdout, stderr } = await execAsync(validated.command, {
+            cwd: validated.cwd,
+            timeout: timeoutMs,
+            maxBuffer: 10 * 1024 * 1024,
+            windowsHide: true,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    command: validated.command,
+                    cwd: validated.cwd ?? process.cwd(),
+                    exitCode: 0,
+                    stdout,
+                    stderr,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        } catch (err: unknown) {
+          const e = err as {
+            code?: number | string;
+            killed?: boolean;
+            signal?: string;
+            stdout?: string;
+            stderr?: string;
+            message?: string;
+          };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    command: validated.command,
+                    cwd: validated.cwd ?? process.cwd(),
+                    exitCode: typeof e.code === 'number' ? e.code : null,
+                    killed: e.killed ?? false,
+                    signal: e.signal ?? null,
+                    stdout: e.stdout ?? '',
+                    stderr: e.stderr ?? '',
+                    error: e.message ?? String(err),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      case 'list_voice_providers': {
+        ListVoiceProvidersSchema.parse(args ?? {});
+        const result = await client.listVoiceProviders();
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'list_voice_models': {
+        const validated = ListVoiceModelsSchema.parse(args);
+        const result = await client.listVoiceModels(validated.provider);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'search_voices': {
+        const validated = SearchVoicesSchema.parse(args ?? {});
+        const result = await client.searchVoices(validated);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'list_provider_voices': {
+        const validated = ListProviderVoicesSchema.parse(args);
+        const { provider, ...filters } = validated;
+        const result = await client.listProviderVoices(provider, filters);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'get_voice': {
+        const validated = GetVoiceSchema.parse(args);
+        const result = await client.getVoice(validated.provider, validated.voiceId);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'buy_twilio_number': {
+        const validated = BuyTwilioNumberSchema.parse(args);
+        const result = await client.buyTwilioNumber(
+          validated.number,
+          validated.agentId,
+          validated.capabilities,
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'import_twilio_number': {
+        const validated = ImportTwilioNumberSchema.parse(args);
+        const result = await client.importTwilioNumber(validated.payload);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'release_twilio_number': {
+        const validated = ReleaseTwilioNumberSchema.parse(args);
+        const result = await client.releaseTwilioNumber(validated.payload);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'check_twilio_number': {
+        const validated = CheckTwilioNumberSchema.parse(args);
+        const result = await client.checkTwilioNumber(validated.payload);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'sync_sms_twilio_number': {
+        const validated = SyncSmsTwilioNumberSchema.parse(args);
+        const result = await client.syncSmsTwilioNumber(validated.payload);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'get_pricing_info': {
+        const validated = GetPricingInfoSchema.parse(args ?? {});
+        const section = validated.section ?? 'all';
+
+        let payload: unknown;
+        switch (section) {
+          case 'all':
+            payload = {
+              ...PRICING,
+              voiceProviders: VOICE_PROVIDERS,
+            };
+            break;
+          case 'plans':
+            payload = { plans: PRICING.plans, meta: PRICING.meta };
+            break;
+          case 'add_ons':
+            payload = { addOns: PRICING.addOns, meta: PRICING.meta };
+            break;
+          case 'credits':
+            payload = {
+              creditConversion: PRICING.meta.creditConversion,
+              creditActions: PRICING.creditActions,
+              notes: PRICING.meta.notes,
+            };
+            break;
+          case 'rules_of_thumb':
+            payload = { rulesOfThumb: PRICING.rulesOfThumb, meta: PRICING.meta };
+            break;
+          case 'models': {
+            const filter = validated.modelFilter?.toLowerCase().trim();
+            const models = filter
+              ? PRICING.models.filter(
+                  (m) =>
+                    m.model.toLowerCase().includes(filter) ||
+                    m.provider.toLowerCase().includes(filter),
+                )
+              : PRICING.models;
+            payload = {
+              creditConversion: PRICING.meta.creditConversion,
+              models,
+              filter: filter ?? null,
+              count: models.length,
+              notes: [
+                'Prices are USD per 1,000,000 tokens (input / output).',
+                'Each interaction also charges 1 base credit ($0.001) on top of token cost.',
+                'BYOK customers pay providers directly — these are the platform-managed prices.',
+              ],
+            };
+            break;
+          }
+          case 'voice_providers':
+            payload = { voiceProviders: VOICE_PROVIDERS, meta: PRICING.meta };
+            break;
+          case 'faq':
+            payload = { faq: PRICING.faq, meta: PRICING.meta };
+            break;
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
         };
       }
 

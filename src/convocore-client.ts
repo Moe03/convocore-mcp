@@ -431,5 +431,134 @@ export class ConvoCoreClient {
       `/workspaces/${workspaceId}/crawler/jobs/${jobId}/pages/${pageId}`
     );
   }
+
+  // ==================== VOICES (TTS) METHODS ====================
+
+  /**
+   * List all supported voice (TTS) providers and the workspace secret key
+   * each provider uses (e.g. ELEVENLABS_API_KEY).
+   */
+  async listVoiceProviders(): Promise<any> {
+    return this.request<any>('/voices/providers');
+  }
+
+  /**
+   * List the available TTS models for a given provider (e.g. eleven_multilingual_v2,
+   * aura-2). Useful when a provider has model-specific voice catalogs.
+   */
+  async listVoiceModels(provider: string): Promise<any> {
+    return this.request<any>(`/voices/${encodeURIComponent(provider)}/models`);
+  }
+
+  /**
+   * Unified search across one or more providers. All filters are optional.
+   * `providers` is a comma-separated list of provider slugs.
+   */
+  async searchVoices(filters: {
+    language?: string;
+    gender?: string;
+    accent?: string;
+    modelId?: string;
+    providers?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<any> {
+    const qs = this.buildVoiceQuery(filters);
+    return this.request<any>(`/voices${qs}`);
+  }
+
+  /**
+   * Browse a single provider's voice catalog with optional filters.
+   */
+  async listProviderVoices(
+    provider: string,
+    filters: {
+      language?: string;
+      gender?: string;
+      accent?: string;
+      modelId?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ): Promise<any> {
+    const qs = this.buildVoiceQuery(filters);
+    return this.request<any>(`/voices/${encodeURIComponent(provider)}${qs}`);
+  }
+
+  /**
+   * Get full metadata + preview MP3 URL for a single voice.
+   */
+  async getVoice(provider: string, voiceId: string): Promise<any> {
+    return this.request<any>(
+      `/voices/${encodeURIComponent(provider)}/${encodeURIComponent(voiceId)}`
+    );
+  }
+
+  private buildVoiceQuery(filters: Record<string, string | number | undefined>): string {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === undefined || value === null || value === '') continue;
+      params.append(key, String(value));
+    }
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }
+
+  // ==================== TWILIO NUMBER METHODS ====================
+
+  /**
+   * Buy a new Twilio number from the platform's Twilio account.
+   */
+  async buyTwilioNumber(
+    number: string,
+    agentId?: string,
+    capabilities: Array<'voice' | 'sms'> = ['voice', 'sms']
+  ): Promise<any> {
+    return this.request<any>('/utils/buy-twilio-number', {
+      method: 'POST',
+      body: JSON.stringify({ number, agentId, capabilities }),
+    });
+  }
+
+  /**
+   * Import a Twilio number you already own into the workspace using your own
+   * Twilio account credentials.
+   */
+  async importTwilioNumber(payload: Record<string, unknown>): Promise<any> {
+    return this.request<any>('/utils/import-twilio-number', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Release (delete) a Twilio number from the workspace.
+   */
+  async releaseTwilioNumber(payload: Record<string, unknown>): Promise<any> {
+    return this.request<any>('/utils/twilio/release-number', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Repair / re-sync the Twilio webhook configuration for a number.
+   */
+  async checkTwilioNumber(payload: Record<string, unknown>): Promise<any> {
+    return this.request<any>('/utils/twilio/check-number', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Assign a Twilio number to an agent for SMS handling.
+   */
+  async syncSmsTwilioNumber(payload: Record<string, unknown>): Promise<any> {
+    return this.request<any>('/utils/twilio/sync-sms', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
 }
 
