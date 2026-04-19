@@ -21,6 +21,7 @@ import { getConfig } from './config.js';
 import { ConvoCoreClient } from './convocore-client.js';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
+import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 
 const execAsync = promisify(exec);
 
@@ -423,6 +424,139 @@ const SyncSmsTwilioNumberSchema = z.object({
     .record(z.any())
     .describe(
       'Body for /utils/twilio/sync-sms. Assigns a Twilio number to an agent for SMS handling. Typically includes phoneNumber (or sid) and agentId.'
+    ),
+});
+
+const InteractWithAgentSchema = z.object({
+  agentId: z.string().min(1).describe('The ID of the agent to interact with.'),
+  convoId: z
+    .string()
+    .min(1)
+    .describe(
+      'Conversation ID. Reuse across turns to keep history; use a fresh ID to start a new conversation.'
+    ),
+  prompt: z
+    .string()
+    .optional()
+    .describe(
+      'User message to send. Special values: "start" (trigger initial greeting), "@cancel:<reason>", "@rewind:<nodeId>" (v2/node agents only). If omitted on a fresh convo, the server may treat it as a no-op.'
+    ),
+  bucket: z
+    .enum(['voiceglow-eu', '(default)'])
+    .optional()
+    .describe(
+      'Region bucket. Auto-derived from CONVOCORE_API_REGION (eu-gcp -> "voiceglow-eu", na-gcp -> "(default)") when omitted.'
+    ),
+  sessionId: z.string().optional().describe('Optional session id; defaults to convoId server-side.'),
+  messageType: z
+    .enum(['text', 'visual'])
+    .optional()
+    .describe('Type of input. Use "visual" together with visualPayload to send images.'),
+  visualPayload: z
+    .object({
+      image: z.string().url().optional(),
+      images: z.array(z.string().url()).optional(),
+      message: z.string().optional(),
+      imageCount: z.number().int().min(0).optional(),
+    })
+    .optional()
+    .describe('Image/visual content for messageType: "visual" turns.'),
+  replyTo: z
+    .object({
+      messageId: z.string().optional(),
+      messageContent: z.string().optional(),
+      messageFrom: z.enum(['human', 'bot']).optional(),
+      messageIndex: z.number().int().optional(),
+      turnIndex: z.number().int().optional(),
+    })
+    .optional()
+    .describe('Reply context when the user is replying to a previous message.'),
+  lightConvoData: z
+    .record(z.any())
+    .optional()
+    .describe(
+      'Per-conversation user/context metadata (userName, userEmail, userPhone, origin, capturedVariables, ...). Surfaced to the agent system prompt where supported.'
+    ),
+  agentData: z
+    .record(z.any())
+    .optional()
+    .describe(
+      'Optional agent override. When provided with at least an `ID`, the server skips loading the agent doc from Firestore and uses this object instead.'
+    ),
+  workspaceData: z.record(z.any()).optional().describe('Optional workspace override.'),
+  turnsHistory: z
+    .array(z.any())
+    .optional()
+    .describe(
+      'Optional override of conversation turns. When set, the server uses this instead of fetching from Firestore.'
+    ),
+  disableUiEngine: z.boolean().optional().describe('Disable UI-engine JSON output for this turn.'),
+  disableRecordHistory: z
+    .boolean()
+    .optional()
+    .describe('Skip persisting this turn to Firestore.'),
+  v2: z.boolean().optional().describe('Force routing to the v2 (node-based) handler.'),
+  isTest: z.boolean().optional().describe('Marks the turn as a test interaction.'),
+  isLLMStudio: z.boolean().optional().describe('Marks the turn as originating from LLM Studio.'),
+  kbPreview: z
+    .boolean()
+    .optional()
+    .describe('Knowledge-base preview mode (skips node routing).'),
+  agentProfileId: z
+    .string()
+    .optional()
+    .describe('Internal profile id (e.g. agency_plan_builder_v1).'),
+  toolTest: z
+    .object({
+      toolId: z.string(),
+      toolName: z.string(),
+      mode: z.enum(['validate', 'generate-and-test']),
+    })
+    .optional()
+    .describe('Run a single tool in test mode.'),
+  formSubmissionMetadata: z
+    .record(z.any())
+    .optional()
+    .describe('Payload describing a UI-engine form / input submission.'),
+  initNodesOptions: z
+    .record(z.any())
+    .optional()
+    .describe('Optional overrides for tools / variables / messages history at session init.'),
+  actionMetadata: z
+    .object({ mid: z.string().optional() })
+    .passthrough()
+    .optional()
+    .describe('Includes mid (client-supplied message id) used for de-duplication.'),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .max(600_000)
+    .optional()
+    .default(120_000)
+    .describe(
+      'How long the MCP will wait for the streamed turn to complete before forcing the WebSocket closed. Default 120s, max 600s. Long voice/tool turns may need more.'
+    ),
+  raw: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'When true, include every raw streamed chunk in the response (debug events, indexes, etc.). When false (default) the response keeps only aggregated text + actions + metadata + final turns to stay token-cheap.'
+    ),
+});
+
+const GetUiEngineSpecSchema = z.object({
+  section: z
+    .enum(['all', 'meta', 'envelopes', 'message_types', 'shared', 'rules', 'checklist', 'primer'])
+    .optional()
+    .default('all')
+    .describe('Which slice of the UI Engine spec to return. Default: "all".'),
+  messageType: z
+    .enum(['text', 'choice', 'visual', 'cardV2', 'carousel', 'iFrame', 'form', 'input'])
+    .optional()
+    .describe(
+      'When set, return only the schema for this UI Engine message type (overrides section).'
     ),
 });
 
@@ -1676,6 +1810,184 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'interact_with_agent',
+    description:
+      "Run ONE agent turn over the Convocore /interact WebSocket and return the streamed result aggregated into a single response. " +
+      "Opens a WSS connection to wss://<region>-gcp-api.vg-stuff.com/interact, sends one InteractObject (agentId + convoId + bucket + prompt + optional context), " +
+      "collects every chunk (text + UI-engine + actions + metadata + sync_chat_history) until the server closes (code 1000) or the timeout fires, then returns: " +
+      "{ assistantText, uiEngineEnabled, uiEngineSnapshot, uiEngineSummary, actions, metadata, turns, closeCode, durationMs, timedOut, chunkCount, chunks? }.\n\n" +
+      "USAGE:\n" +
+      "- Use the SAME `convoId` across turns to keep history; use a fresh one to start a new conversation.\n" +
+      "- `prompt: \"start\"` triggers the agent's initial greeting (no user message added).\n" +
+      "- `prompt: \"@cancel:<reason>\"` cancels an in-flight turn (rarely useful from a single MCP call).\n" +
+      "- `prompt: \"@rewind:<nodeId>\"` rewinds a node-based agent.\n" +
+      "- For images, set messageType=\"visual\" and pass `visualPayload`.\n" +
+      "- `bucket` is auto-derived from CONVOCORE_API_REGION; only override if you really mean to talk to the other region.\n" +
+      "- Set `raw: true` to include every streamed chunk (debug frames, chunkIndex, every UI Engine snapshot, etc.) when you need the full trace. Default keeps the response token-cheap.\n\n" +
+      "INTERPRETING THE RESPONSE:\n" +
+      "- When `uiEngineEnabled: false`, the agent streamed plain Markdown — read `assistantText`.\n" +
+      "- When `uiEngineEnabled: true`, the agent streamed UI Engine snapshots — read `uiEngineSnapshot` (parsed final TurnProps) and `uiEngineSummary` (compact per-message summary). `assistantText` may be empty in this mode.\n" +
+      "- To force plain text on a UI-Engine-enabled agent for one turn, pass `disableUiEngine: true`.\n\n" +
+      UI_ENGINE_PRIMER + "\n\n" +
+      "For the FULL UI Engine schema (every payload field, validation rules, allowed enums) call `get_ui_engine_spec` first.\n\n" +
+      "WARNING: This consumes ConvoCore credits exactly like a real agent turn (LLM + voice + tools). It is NOT a dry-run.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The ID of the agent to interact with.' },
+        convoId: {
+          type: 'string',
+          description:
+            'Conversation ID. Reuse across turns to keep history; use a fresh ID to start a new conversation.',
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'User message. Special values: "start" (initial greeting), "@cancel:<reason>", "@rewind:<nodeId>".',
+        },
+        bucket: {
+          type: 'string',
+          enum: ['voiceglow-eu', '(default)'],
+          description:
+            'Region bucket. Auto-derived from CONVOCORE_API_REGION when omitted (eu-gcp -> "voiceglow-eu", na-gcp -> "(default)").',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'Optional session id; defaults to convoId server-side.',
+        },
+        messageType: {
+          type: 'string',
+          enum: ['text', 'visual'],
+          description: 'Type of input. Use "visual" together with visualPayload for images.',
+        },
+        visualPayload: {
+          type: 'object',
+          description: 'Image/visual content for messageType: "visual" turns.',
+          properties: {
+            image: { type: 'string', description: 'Primary image URL.' },
+            images: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Additional image URLs.',
+            },
+            message: { type: 'string', description: 'Optional caption / accompanying message.' },
+            imageCount: { type: 'integer', minimum: 0 },
+          },
+        },
+        replyTo: {
+          type: 'object',
+          description: 'Reply context when the user is replying to a previous message.',
+          properties: {
+            messageId: { type: 'string' },
+            messageContent: { type: 'string' },
+            messageFrom: { type: 'string', enum: ['human', 'bot'] },
+            messageIndex: { type: 'integer' },
+            turnIndex: { type: 'integer' },
+          },
+        },
+        lightConvoData: {
+          type: 'object',
+          description:
+            'Per-conversation user/context metadata (userName, userEmail, userPhone, origin, capturedVariables, ...). Surfaced to the agent system prompt where supported.',
+        },
+        agentData: {
+          type: 'object',
+          description:
+            'Optional agent override. When provided with at least an `ID`, the server skips loading the agent doc from Firestore.',
+        },
+        workspaceData: { type: 'object', description: 'Optional workspace override.' },
+        turnsHistory: {
+          type: 'array',
+          description:
+            'Optional override of conversation turns. When set, the server uses this instead of fetching from Firestore.',
+        },
+        disableUiEngine: {
+          type: 'boolean',
+          description: 'Disable UI-engine JSON output for this turn.',
+        },
+        disableRecordHistory: {
+          type: 'boolean',
+          description: 'Skip persisting this turn to Firestore.',
+        },
+        v2: { type: 'boolean', description: 'Force routing to the v2 (node-based) handler.' },
+        isTest: { type: 'boolean', description: 'Marks the turn as a test interaction.' },
+        isLLMStudio: { type: 'boolean', description: 'Marks the turn as originating from LLM Studio.' },
+        kbPreview: {
+          type: 'boolean',
+          description: 'Knowledge-base preview mode (skips node routing).',
+        },
+        agentProfileId: {
+          type: 'string',
+          description: 'Internal profile id (e.g. agency_plan_builder_v1).',
+        },
+        toolTest: {
+          type: 'object',
+          description: 'Run a single tool in test mode.',
+          properties: {
+            toolId: { type: 'string' },
+            toolName: { type: 'string' },
+            mode: { type: 'string', enum: ['validate', 'generate-and-test'] },
+          },
+          required: ['toolId', 'toolName', 'mode'],
+        },
+        formSubmissionMetadata: {
+          type: 'object',
+          description: 'Payload describing a UI-engine form / input submission.',
+        },
+        initNodesOptions: {
+          type: 'object',
+          description: 'Optional overrides for tools / variables / messages history at session init.',
+        },
+        actionMetadata: {
+          type: 'object',
+          description: 'Includes mid (client-supplied message id) used for de-duplication.',
+          properties: { mid: { type: 'string' } },
+        },
+        timeoutMs: {
+          type: 'integer',
+          minimum: 1000,
+          maximum: 600000,
+          description:
+            'How long to wait for the streamed turn to complete before closing the WebSocket. Default 120000 (120s), max 600000 (10min).',
+        },
+        raw: {
+          type: 'boolean',
+          description:
+            'When true, include every raw streamed chunk in the response. Default false (token-cheap aggregated view only).',
+        },
+      },
+      required: ['agentId', 'convoId'],
+    },
+  },
+  {
+    name: 'get_ui_engine_spec',
+    description:
+      "Return the FULL Convocore UI Engine schema (the structured message format agents emit when `vg_enableUIEngine: true`). " +
+      "ALWAYS CALL THIS FIRST when: " +
+      "(a) testing a UI-Engine-enabled agent via `interact_with_agent` and you need to validate the output, OR " +
+      "(b) creating / updating an agent that should produce UI Engine output (so the system prompt teaches the LLM to emit valid `text` / `choice` / `visual` / `cardV2` / `carousel` / `iFrame` / `form` / `input` messages). " +
+      "Returns: meta (streaming + channel-gating semantics), envelopes (TurnProps / ChatMessage), messageTypes (every UiEngineMessage shape with payload fields and examples), shared types (UiEngineButton, UiEngineInputField), rules, and a validationChecklist. " +
+      "Use `section` to narrow the response: \"meta\" | \"envelopes\" | \"message_types\" | \"shared\" | \"rules\" | \"checklist\" | \"primer\" | \"all\" (default). " +
+      "Use `messageType` to drill into a single message-type schema (e.g. \"choice\" or \"form\"). " +
+      "Static knowledge — does NOT hit the API and does NOT consume credits.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: {
+          type: 'string',
+          enum: ['all', 'meta', 'envelopes', 'message_types', 'shared', 'rules', 'checklist', 'primer'],
+          description: 'Which slice of the spec to return. Default: "all".',
+        },
+        messageType: {
+          type: 'string',
+          enum: ['text', 'choice', 'visual', 'cardV2', 'carousel', 'iFrame', 'form', 'input'],
+          description:
+            'When set, return only the schema for this message type (overrides section). Use when you only need one shape.',
+        },
+      },
+    },
+  },
+  {
     name: 'get_pricing_info',
     description:
       'Return Convocore pricing information so the assistant can quote plans, add-ons, voice/chat cost rules of thumb, credit conversions, and per-model token prices to the user. ' +
@@ -2661,6 +2973,88 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await client.syncSmsTwilioNumber(validated.payload);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      case 'interact_with_agent': {
+        const validated = InteractWithAgentSchema.parse(args);
+        const { timeoutMs, raw, bucket, ...rest } = validated;
+
+        const request = {
+          ...rest,
+          bucket: bucket ?? client.getDefaultInteractBucket(),
+        };
+
+        const result = await client.interactWithAgent(request, { timeoutMs });
+
+        const responsePayload = raw
+          ? result
+          : {
+              assistantText: result.assistantText,
+              uiEngineEnabled: result.uiEngineEnabled,
+              uiEngineSnapshot: result.uiEngineSnapshot,
+              uiEngineSummary: result.uiEngineSummary,
+              actions: result.actions,
+              metadata: result.metadata,
+              turns: result.turns,
+              closeCode: result.closeCode,
+              closeReason: result.closeReason,
+              durationMs: result.durationMs,
+              timedOut: result.timedOut,
+              chunkCount: result.chunks.length,
+            };
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(responsePayload, null, 2) }],
+        };
+      }
+
+      case 'get_ui_engine_spec': {
+        const validated = GetUiEngineSpecSchema.parse(args ?? {});
+        const section = validated.section ?? 'all';
+
+        let payload: unknown;
+
+        if (validated.messageType) {
+          const schema = (UI_ENGINE_SPEC.messageTypes as Record<string, unknown>)[
+            validated.messageType
+          ];
+          payload = {
+            messageType: validated.messageType,
+            schema,
+            shared: UI_ENGINE_SPEC.shared,
+          };
+        } else {
+          switch (section) {
+            case 'all':
+              payload = UI_ENGINE_SPEC;
+              break;
+            case 'meta':
+              payload = { meta: UI_ENGINE_SPEC.meta };
+              break;
+            case 'envelopes':
+              payload = { envelopes: UI_ENGINE_SPEC.envelopes };
+              break;
+            case 'message_types':
+              payload = { messageTypes: UI_ENGINE_SPEC.messageTypes };
+              break;
+            case 'shared':
+              payload = { shared: UI_ENGINE_SPEC.shared };
+              break;
+            case 'rules':
+              payload = { rules: UI_ENGINE_SPEC.rules };
+              break;
+            case 'checklist':
+              payload = { validationChecklist: UI_ENGINE_SPEC.validationChecklist };
+              break;
+            case 'primer':
+              payload = { primer: UI_ENGINE_PRIMER };
+              break;
+          }
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
         };
       }
 

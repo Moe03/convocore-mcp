@@ -3,6 +3,7 @@
  * Handles all API interactions with ConvoCore
  */
 
+import WebSocket from 'ws';
 import {
   ConvoCoreConfig,
   Agent,
@@ -14,7 +15,83 @@ import {
   ApiResponse,
   ListAgentsResponse,
   ApiError,
+  InteractRequest,
+  InteractResult,
+  InteractChunkMessage,
+  UiEngineMessageSummary,
 } from './types.js';
+
+/**
+ * Build a compact, scannable summary of the UI Engine snapshot so the MCP
+ * host can validate / describe the bot turn without re-parsing the whole
+ * TurnProps. The list intentionally collapses each message to its `type`
+ * plus a short, type-specific summary string.
+ */
+function summarizeUiEngineSnapshot(snapshot: any | null): UiEngineMessageSummary[] {
+  if (!snapshot || typeof snapshot !== 'object') return [];
+  const messages = Array.isArray(snapshot.messages) ? snapshot.messages : [];
+
+  return messages.map((msg: any, index: number): UiEngineMessageSummary => {
+    const item = msg?.item ?? {};
+    const type: string = item?.type ?? msg?.type ?? 'unknown';
+    const payload = item?.payload ?? {};
+    let summary = '';
+    let webChannelOnly = false;
+
+    switch (type) {
+      case 'text': {
+        const message = typeof payload?.message === 'string' ? payload.message : '';
+        summary = message.length > 160 ? `${message.slice(0, 157)}...` : message;
+        break;
+      }
+      case 'choice': {
+        const buttons = Array.isArray(payload?.buttons) ? payload.buttons : [];
+        const names = buttons
+          .map((b: any) => (typeof b?.name === 'string' ? b.name : ''))
+          .filter(Boolean);
+        summary = `${buttons.length} button${buttons.length === 1 ? '' : 's'}: ${names.join(' | ')}`;
+        break;
+      }
+      case 'visual': {
+        summary = typeof payload?.image === 'string' ? `image: ${payload.image}` : 'image';
+        break;
+      }
+      case 'cardV2': {
+        const title = typeof payload?.title === 'string' ? payload.title : '';
+        const buttonCount = Array.isArray(payload?.buttons) ? payload.buttons.length : 0;
+        summary = `card "${title}" (${buttonCount} button${buttonCount === 1 ? '' : 's'})`;
+        break;
+      }
+      case 'carousel': {
+        const cards = Array.isArray(payload?.cards) ? payload.cards : [];
+        summary = `carousel with ${cards.length} card${cards.length === 1 ? '' : 's'}`;
+        break;
+      }
+      case 'iFrame': {
+        summary = `${payload?.layout ?? 'unknown'} iframe: ${payload?.url ?? ''}`;
+        break;
+      }
+      case 'form': {
+        const fields = Array.isArray(payload?.fields) ? payload.fields : [];
+        summary = `form "${payload?.title ?? ''}" with ${fields.length} field${fields.length === 1 ? '' : 's'}`;
+        webChannelOnly = true;
+        break;
+      }
+      case 'input': {
+        const fieldId = payload?.field?.id ?? '';
+        const fieldType = payload?.field?.type ?? '';
+        summary = `input ${fieldType}${fieldId ? ` (#${fieldId})` : ''}`;
+        webChannelOnly = true;
+        break;
+      }
+      default: {
+        summary = `(${type})`;
+      }
+    }
+
+    return { index, type, summary, webChannelOnly };
+  });
+}
 
 export class ConvoCoreClient {
   private config: ConvoCoreConfig;
@@ -558,6 +635,196 @@ export class ConvoCoreClient {
     return this.request<any>('/utils/twilio/sync-sms', {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  }
+
+  // ==================== INTERACT (WebSocket) METHODS ====================
+
+  /**
+   * Build the WebSocket URL for the /interact endpoint by stripping any
+   * /v3 (or other versioned) suffix from the REST base URL and swapping
+   * the scheme to wss/ws.
+   */
+  private getInteractWsUrl(): string {
+    const base = this.config.baseUrl;
+    let url: URL;
+    try {
+      url = new URL(base);
+    } catch {
+      throw new Error(`Invalid baseUrl in config: ${base}`);
+    }
+
+    const wsProtocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
+    return `${wsProtocol}//${url.host}/interact`;
+  }
+
+  /**
+   * Derive the bucket discriminator from the configured region. Callers can
+   * override by setting `bucket` explicitly on the InteractRequest.
+   */
+  getDefaultInteractBucket(): 'voiceglow-eu' | '(default)' {
+    return this.config.apiRegion === 'eu-gcp' ? 'voiceglow-eu' : '(default)';
+  }
+
+  /**
+   * Drive a single agent turn over the /interact WebSocket. Opens a WSS
+   * connection, sends one InteractObject, collects every streamed chunk
+   * until the server closes (code 1000) or the timeout fires, then returns
+   * an aggregated result.
+   *
+   * Notes:
+   * - This consumes ConvoCore credits exactly like a normal agent turn.
+   * - Authentication is sent via the `Authorization: Bearer <secret>` header
+   *   on the WS handshake (same scheme as REST).
+   */
+  async interactWithAgent(
+    request: InteractRequest,
+    options: { timeoutMs?: number } = {}
+  ): Promise<InteractResult> {
+    const timeoutMs = Math.max(1000, Math.min(options.timeoutMs ?? 120_000, 600_000));
+    const url = this.getInteractWsUrl();
+    const startedAt = Date.now();
+
+    return new Promise<InteractResult>((resolve, reject) => {
+      let settled = false;
+      const chunks: InteractChunkMessage[] = [];
+      const assistantTextParts: string[] = [];
+      const uiEnginePayloads: any[] = [];
+      const actions: InteractChunkMessage['action'] extends infer A ? A[] : never[] = [] as any;
+      let metadata: InteractChunkMessage['metadata'] | null = null;
+      let turns: any[] = [];
+      let timedOut = false;
+      let uiEngineEnabled = false;
+      let uiEngineSnapshot: any | null = null;
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(url, {
+          headers: {
+            Authorization: `Bearer ${this.config.workspaceSecret}`,
+          },
+        });
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        try {
+          ws.close(1000, 'mcp-client-timeout');
+        } catch {
+          // ignore
+        }
+      }, timeoutMs);
+
+      const finalize = (closeCode: number | null, closeReason: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({
+          assistantText: assistantTextParts.join(''),
+          uiEngineEnabled,
+          uiEngineSnapshot,
+          uiEngineSummary: summarizeUiEngineSnapshot(uiEngineSnapshot),
+          uiEnginePayloads,
+          actions: actions as any,
+          metadata,
+          turns,
+          chunks,
+          closeCode,
+          closeReason,
+          durationMs: Date.now() - startedAt,
+          timedOut,
+        });
+      };
+
+      ws.on('open', () => {
+        try {
+          ws.send(JSON.stringify(request));
+        } catch (err) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+      });
+
+      ws.on('message', (raw: WebSocket.RawData) => {
+        let text: string;
+        if (typeof raw === 'string') {
+          text = raw;
+        } else if (Buffer.isBuffer(raw)) {
+          text = raw.toString('utf8');
+        } else if (Array.isArray(raw)) {
+          text = Buffer.concat(raw).toString('utf8');
+        } else {
+          text = Buffer.from(raw as ArrayBuffer).toString('utf8');
+        }
+
+        let msg: InteractChunkMessage;
+        try {
+          msg = JSON.parse(text) as InteractChunkMessage;
+        } catch {
+          // Non-JSON frames are still surfaced as raw chunks so callers can debug.
+          msg = { type: 'chunk', chunk: text };
+        }
+
+        chunks.push(msg);
+
+        switch (msg.type) {
+          case 'chunk': {
+            if (msg.ui_engine && typeof msg.chunk === 'string') {
+              uiEngineEnabled = true;
+              try {
+                const parsed = JSON.parse(msg.chunk);
+                uiEnginePayloads.push(parsed);
+                // UI Engine snapshots are OVERWRITING (full snapshot each
+                // time). Always keep the latest as the canonical state.
+                uiEngineSnapshot = parsed;
+              } catch {
+                uiEnginePayloads.push(msg.chunk);
+              }
+            } else if (typeof msg.chunk === 'string') {
+              assistantTextParts.push(msg.chunk);
+            }
+            break;
+          }
+          case 'action': {
+            if (msg.action) {
+              (actions as any).push(msg.action);
+            }
+            break;
+          }
+          case 'metadata': {
+            if (msg.metadata) metadata = msg.metadata;
+            if (Array.isArray(msg.metadata?.turns)) {
+              turns = msg.metadata!.turns!;
+            }
+            break;
+          }
+          case 'sync_chat_history': {
+            if (Array.isArray(msg.turns)) turns = msg.turns;
+            break;
+          }
+          // 'debug' frames are kept in `chunks` but not aggregated.
+          default:
+            break;
+        }
+      });
+
+      ws.on('error', (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+
+      ws.on('close', (code: number, reason: Buffer) => {
+        finalize(code ?? null, reason?.toString('utf8') ?? '');
+      });
     });
   }
 }

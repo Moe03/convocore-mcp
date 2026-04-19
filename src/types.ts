@@ -173,6 +173,148 @@ export interface CrawlerJob {
   crawlerSubmissionEndpoint?: string | null;
 }
 
+// ==================== INTERACT (WebSocket) TYPES ====================
+
+export type InteractBucket = 'voiceglow-eu' | '(default)';
+
+export type InteractMessageType = 'text' | 'visual';
+
+export interface InteractVisualPayload {
+  image?: string;
+  images?: string[];
+  message?: string;
+  imageCount?: number;
+}
+
+export interface InteractReplyTo {
+  messageId?: string;
+  messageContent?: string;
+  messageFrom?: 'human' | 'bot';
+  messageIndex?: number;
+  turnIndex?: number;
+}
+
+export interface InteractLightConvoData {
+  userID?: string;
+  userName?: string;
+  userEmail?: string;
+  userPhone?: string;
+  userImage?: string;
+  origin?: string;
+  nodesInfo?: { currentNode?: string; [k: string]: any };
+  capturedVariables?: Record<string, any>;
+  [key: string]: any;
+}
+
+/**
+ * Mirrors EWSInteractModel — the single payload sent to the /interact
+ * WebSocket after the connection opens.
+ */
+export interface InteractRequest {
+  agentId: string;
+  convoId: string;
+  bucket: InteractBucket;
+  prompt?: string;
+  sessionId?: string;
+  messageType?: InteractMessageType;
+  visualPayload?: InteractVisualPayload;
+  replyTo?: InteractReplyTo;
+  actionMetadata?: { mid?: string; [k: string]: any };
+  agentData?: Record<string, any>;
+  workspaceData?: Record<string, any>;
+  turnsHistory?: any[];
+  lightConvoData?: InteractLightConvoData;
+  disableUiEngine?: boolean;
+  disableRecordHistory?: boolean;
+  v2?: boolean;
+  isTest?: boolean;
+  isLLMStudio?: boolean;
+  kbPreview?: boolean;
+  agentProfileId?: string;
+  toolTest?: {
+    toolId: string;
+    toolName: string;
+    mode: 'validate' | 'generate-and-test';
+  };
+  formSubmissionMetadata?: Record<string, any>;
+  initNodesOptions?: Record<string, any>;
+  [key: string]: any;
+}
+
+export interface InteractAction {
+  type: 'request_handoff' | 'tool_call' | string;
+  payload?: string;
+  toolMetadata?: {
+    toolName?: string;
+    input?: any;
+    output?: any;
+  };
+  [key: string]: any;
+}
+
+/**
+ * One streamed event from the /interact WebSocket. Mirrors EWSChunkModel.
+ */
+export interface InteractChunkMessage {
+  type: 'chunk' | 'metadata' | 'debug' | 'action' | 'sync_chat_history' | string;
+  chunk?: string;
+  chunkIndex?: number;
+  ui_engine?: boolean;
+  isV2?: boolean;
+  action?: InteractAction;
+  turns?: any[];
+  metadata?: {
+    sources?: any[];
+    turns?: any[];
+    inputTokens?: number;
+    outputTokens?: number;
+    llmUsed?: string;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+/**
+ * Compact summary of one UI Engine message extracted from the latest
+ * snapshot — designed so the MCP host can scan the structure quickly
+ * without re-parsing the whole TurnProps.
+ */
+export interface UiEngineMessageSummary {
+  index: number;
+  type: string;
+  /** Short human-readable summary — first line of text, button names, card title, etc. */
+  summary: string;
+  /** True for form / input messages that require a web rendering surface. */
+  webChannelOnly: boolean;
+}
+
+/**
+ * Aggregated result returned by ConvoCoreClient.interactWithAgent — flattens
+ * the streamed chunks into something an MCP host can consume in one shot.
+ *
+ * IMPORTANT semantics for UI Engine turns:
+ * - `uiEngineSnapshot` is the LATEST parsed TurnProps from the final
+ *   `ui_engine: true` chunk. UI Engine snapshots are overwriting (full
+ *   snapshots), so this represents the final bot turn state.
+ * - `uiEnginePayloads` is the chronological list of every parsed snapshot
+ *   (kept for debugging when `raw: true`).
+ */
+export interface InteractResult {
+  assistantText: string;
+  uiEngineEnabled: boolean;
+  uiEngineSnapshot: any | null;
+  uiEngineSummary: UiEngineMessageSummary[];
+  uiEnginePayloads: any[];
+  actions: InteractAction[];
+  metadata: InteractChunkMessage['metadata'] | null;
+  turns: any[];
+  chunks: InteractChunkMessage[];
+  closeCode: number | null;
+  closeReason: string;
+  durationMs: number;
+  timedOut: boolean;
+}
+
 export interface CrawlerPageSummary {
   id: string;
   url: string;

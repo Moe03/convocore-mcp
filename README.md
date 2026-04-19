@@ -30,6 +30,8 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Conversations | 8 | CRUD, list with pagination, export (JSON/CSV), assign to user |
 | Knowledge base | 6 | CRUD, list, stats (described in-tool as **VG agents** only) |
 | Crawler | 6 | Create, list, inspect, page through results, and delete immutable crawler jobs |
+| Interact (WS) | 1 | Drive one agent turn over the `/interact` WebSocket and aggregate the streamed result (plain Markdown **and** UI Engine snapshots) |
+| UI Engine | 1 | Static spec for the structured message format agents emit when `vg_enableUIEngine: true` |
 
 ---
 
@@ -272,6 +274,8 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `delete_crawler_job` | DELETE | `/workspaces/{workspaceId}/crawler/jobs/{jobId}` |
 | `list_crawler_job_pages` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages?page&limit` |
 | `get_crawler_job_page` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages/{pageId}` |
+| `interact_with_agent` | WSS | `wss://{region}-gcp-api.vg-stuff.com/interact` (single `InteractObject` in, streamed `ChunkMessage`s out) |
+| `get_ui_engine_spec` | n/a | Static reference — does not hit the API |
 
 ---
 
@@ -365,6 +369,84 @@ Crawler jobs are intentionally **immutable** after creation. There is **no** `up
 **`list_crawler_job_pages`** — Required: `workspaceId`, `jobId`. Optional: `page` (default 1), `limit` (default 20, max 100). Returns scraped page summaries.
 
 **`get_crawler_job_page`** — Required: `workspaceId`, `jobId`, `pageId`. Returns one scraped page, including markdown / HTML payload when available.
+
+### Interact (WebSocket) tool
+
+`interact_with_agent` is the only WebSocket-backed tool. It opens a single connection to `wss://{region}-gcp-api.vg-stuff.com/interact`, sends one `InteractObject`, and aggregates every streamed `ChunkMessage` (`chunk` / `debug` / `action` / `metadata` / `sync_chat_history`) into one MCP response. Authentication uses the same `Authorization: Bearer <WORKSPACE_SECRET>` header as REST.
+
+**Required:** `agentId`, `convoId`.
+
+**Common optional:**
+
+- `prompt` — User message. Special values: `"start"` (initial greeting), `"@cancel:<reason>"`, `"@rewind:<nodeId>"` (v2/node agents).
+- `bucket` — `voiceglow-eu` or `(default)`. Auto-derived from `CONVOCORE_API_REGION` (eu-gcp → `voiceglow-eu`, na-gcp → `(default)`); only override to deliberately cross regions.
+- `messageType` + `visualPayload` — for image turns.
+- `replyTo` — reply context for a previous message.
+- `lightConvoData` — `userName`, `userEmail`, `userPhone`, `origin`, `capturedVariables`, etc. Surfaced into the agent's system prompt where supported.
+- `agentData` / `workspaceData` / `turnsHistory` — overrides that skip Firestore loads.
+- `disableUiEngine`, `disableRecordHistory`, `v2`, `isTest`, `isLLMStudio`, `kbPreview`, `agentProfileId`, `toolTest`, `formSubmissionMetadata`, `initNodesOptions` — same flags as the underlying `EWSInteractModel`.
+- `timeoutMs` (default `120000`, max `600000`) — how long the MCP waits for the streamed turn before forcing the WebSocket closed.
+- `raw` (default `false`) — when true, the response includes every raw streamed chunk; when false, only the aggregated text + actions + metadata + final turns are returned (cheaper on tokens).
+
+**Response shape (default `raw: false`):**
+
+```json
+{
+  "assistantText": "...",
+  "uiEngineEnabled": false,
+  "uiEngineSnapshot": null,
+  "uiEngineSummary": [],
+  "actions": [],
+  "metadata": { "inputTokens": 0, "outputTokens": 0, "llmUsed": "...", "sources": [], "turns": [] },
+  "turns": [],
+  "closeCode": 1000,
+  "closeReason": "",
+  "durationMs": 1234,
+  "timedOut": false,
+  "chunkCount": 17
+}
+```
+
+#### UI Engine handling
+
+When the agent has `vg_enableUIEngine: true` (and the request did not pass `disableUiEngine: true`), the server streams **JSON-stringified `TurnProps` snapshots** instead of plain text. UI Engine snapshots are **overwriting** (each chunk is a full snapshot of the bot turn so far) — `interact_with_agent` parses them, keeps only the **latest** snapshot as `uiEngineSnapshot`, and produces a compact `uiEngineSummary` for quick scanning:
+
+```json
+{
+  "assistantText": "",
+  "uiEngineEnabled": true,
+  "uiEngineSnapshot": {
+    "from": "bot",
+    "ts": 1719931200,
+    "messages": [
+      { "from": "bot", "type": "text",   "item": { "type": "text",   "payload": { "message": "Pick one:" } } },
+      { "from": "bot", "type": "choice", "item": { "type": "choice", "payload": { "buttons": [ { "name": "Pricing", "request": { "type": "text", "payload": { "message": "Tell me about pricing" } } } ] } } }
+    ]
+  },
+  "uiEngineSummary": [
+    { "index": 0, "type": "text",   "summary": "Pick one:",                 "webChannelOnly": false },
+    { "index": 1, "type": "choice", "summary": "1 button: Pricing",         "webChannelOnly": false }
+  ],
+  "...": "..."
+}
+```
+
+The eight UI Engine message types are `text`, `choice`, `visual`, `cardV2`, `carousel`, `iFrame`, `form`, `input`. **`form` and `input` are emitted only on web channels** (`web-chat` / `text` origin). Call **`get_ui_engine_spec`** before testing or building UI-Engine-enabled agents to load the full schema.
+
+> **Cost note:** every call runs a real agent turn (LLM + voice + tools) and consumes ConvoCore credits exactly like a normal chat. It is not a dry-run.
+
+### UI Engine spec tool
+
+**`get_ui_engine_spec`** — Returns the full Convocore UI Engine schema. Static knowledge, no API call, no credits.
+
+- Required: none.
+- Optional: `section` — `"all"` (default) | `"meta"` | `"envelopes"` | `"message_types"` | `"shared"` | `"rules"` | `"checklist"` | `"primer"`.
+- Optional: `messageType` — `"text" | "choice" | "visual" | "cardV2" | "carousel" | "iFrame" | "form" | "input"`. When set, returns just that message-type schema (overrides `section`).
+
+Use this BEFORE:
+
+1. Validating output from `interact_with_agent` against a UI-Engine-enabled agent.
+2. Creating / updating an agent whose system prompt should teach the model to emit UI Engine messages — bake the relevant rules and `messageType` shapes into `nodes[0].instructions`.
 
 ---
 
