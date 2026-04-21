@@ -5,7 +5,11 @@
       "args": ["-y", "convocore-mcp"],
       "env": {
         "WORKSPACE_SECRET": "your_workspace_secret_here",
-        "CONVOCORE_API_REGION": "eu-gcp"
+        "CONVOCORE_API_REGION": "eu-gcp",
+
+        "_comment_local_dev": "Uncomment one or both of the next two to point the MCP at a local backend.",
+        "_CONVOCORE_API_BASE_URL_example": "http://localhost:5000/v3",
+        "_CONVOCORE_INTERACT_WS_URL_example": "ws://localhost:5000/interact"
       }
     }
   }

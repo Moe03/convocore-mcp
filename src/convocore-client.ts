@@ -641,11 +641,20 @@ export class ConvoCoreClient {
   // ==================== INTERACT (WebSocket) METHODS ====================
 
   /**
-   * Build the WebSocket URL for the /interact endpoint by stripping any
-   * /v3 (or other versioned) suffix from the REST base URL and swapping
-   * the scheme to wss/ws.
+   * Build the WebSocket URL for the /interact endpoint.
+   *
+   * Precedence:
+   *   1. `config.interactWsUrl` (from env `CONVOCORE_INTERACT_WS_URL`) — used
+   *      verbatim. Lets you point ONLY the WebSocket at a local debug server
+   *      (e.g. `ws://localhost:5000/interact`) while REST keeps hitting prod.
+   *   2. Derived from `config.baseUrl` by swapping the scheme to ws/wss and
+   *      pointing at /interact on the same host (preserves port).
    */
   private getInteractWsUrl(): string {
+    if (this.config.interactWsUrl) {
+      return this.config.interactWsUrl;
+    }
+
     const base = this.config.baseUrl;
     let url: URL;
     try {

@@ -75,9 +75,10 @@ flowchart LR
 |----------|----------|---------|---------|
 | `WORKSPACE_SECRET` | **Yes** | — | Bearer token for the ConvoCore workspace (same as API key/secret from your dashboard). |
 | `CONVOCORE_API_REGION` | No | `eu-gcp` | `eu-gcp` or `na-gcp`; selects API host (see below). |
-| `CONVOCORE_API_BASE_URL` | No | — | Optional full base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. |
+| `CONVOCORE_API_BASE_URL` | No | — | Optional full REST base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. The `/interact` WebSocket URL is derived from this (scheme swapped to `ws/wss`, path replaced with `/interact`) unless `CONVOCORE_INTERACT_WS_URL` is also set. |
+| `CONVOCORE_INTERACT_WS_URL` | No | — | Optional explicit override for **only** the `/interact` WebSocket URL, e.g. `ws://localhost:5000/interact`. Set this when you want REST traffic on prod but WebSocket traffic on a local debug server (or vice-versa). Used verbatim — supply scheme, host, port, and path. |
 
-The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, and optional `CONVOCORE_API_BASE_URL`. Any other variables in compose files or docs are ignored unless you wire them yourself.
+The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_API_BASE_URL`, and optional `CONVOCORE_INTERACT_WS_URL`. Any other variables in compose files or docs are ignored unless you wire them yourself.
 
 ### API regions and base URLs
 
@@ -86,7 +87,7 @@ The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, and optional `CONVO
 | `eu-gcp` | `https://eu-gcp-api.vg-stuff.com/v3` |
 | `na-gcp` | `https://na-gcp-api.vg-stuff.com/v3` |
 
-For local development, set `CONVOCORE_API_BASE_URL=http://localhost:5000/v3`.
+For local development, set `CONVOCORE_API_BASE_URL=http://localhost:5000/v3` to redirect both REST and WebSocket, or set `CONVOCORE_INTERACT_WS_URL=ws://localhost:5000/interact` to redirect only the `/interact` WebSocket while REST keeps using the regional host.
 
 ---
 

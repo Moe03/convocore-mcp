@@ -6,6 +6,14 @@ export interface ConvoCoreConfig {
   workspaceSecret: string;
   apiRegion: 'eu-gcp' | 'na-gcp';
   baseUrl: string;
+  /**
+   * Optional explicit override for the /interact WebSocket URL.
+   * When unset, the URL is derived from `baseUrl` by swapping the scheme
+   * to ws/wss and pointing at /interact on the same host.
+   * Set to e.g. `ws://localhost:5000/interact` to debug a local server
+   * while keeping REST traffic on prod.
+   */
+  interactWsUrl?: string;
 }
 
 export interface VoiceConfig {
