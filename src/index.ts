@@ -2987,13 +2987,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const result = await client.interactWithAgent(request, { timeoutMs });
 
+        // When the tested agent emitted UI Engine output, attach an
+        // inline guidance block so the calling LLM knows EXACTLY what
+        // shape to expect / validate without having to call
+        // get_ui_engine_spec separately. This mirrors the contract that
+        // the backend `createUiEnginePrompt` injects into the agent.
+        const uiEngineGuidance = result.uiEngineEnabled
+          ? {
+              note:
+                'This turn used the Convocore UI Engine. The tested agent\'s LLM was instructed to emit a single JSON array of message objects ([{ type, payload }, ...]). The server then wraps each entry into messages[].item inside the TurnProps snapshot you see in `uiEngineSnapshot`.',
+              expectedAgentOutputContract: UI_ENGINE_SPEC.agentOutputContract,
+              preferredStructure: UI_ENGINE_SPEC.preferredStructure,
+              channelRules: UI_ENGINE_SPEC.channelRules,
+              validationChecklist: UI_ENGINE_SPEC.validationChecklist,
+              allowedMessageTypes: Object.keys(UI_ENGINE_SPEC.messageTypes),
+              snapshotSemantics:
+                'UI Engine chunks are OVERWRITING — `uiEngineSnapshot` is the LATEST full snapshot, equivalent to the agent\'s final output for this turn.',
+              forPlainTextOnNextTurn:
+                'Pass disableUiEngine: true on the next interact_with_agent call to bypass UI Engine for one turn.',
+              fullSpecHint:
+                'For the complete schema (every payload field, validation rules, examples) call `get_ui_engine_spec`.',
+            }
+          : undefined;
+
         const responsePayload = raw
-          ? result
+          ? { ...result, ...(uiEngineGuidance ? { uiEngineGuidance } : {}) }
           : {
               assistantText: result.assistantText,
               uiEngineEnabled: result.uiEngineEnabled,
               uiEngineSnapshot: result.uiEngineSnapshot,
               uiEngineSummary: result.uiEngineSummary,
+              ...(uiEngineGuidance ? { uiEngineGuidance } : {}),
               actions: result.actions,
               metadata: result.metadata,
               turns: result.turns,
