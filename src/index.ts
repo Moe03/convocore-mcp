@@ -22,6 +22,7 @@ import { ConvoCoreClient } from './convocore-client.js';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
+import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 
 const execAsync = promisify(exec);
 
@@ -30,6 +31,73 @@ const config = getConfig();
 const client = new ConvoCoreClient(config);
 
 // Define tool schemas
+const AgentNodeSchema = z
+  .object({
+    instructions: z
+      .string()
+      .optional()
+      .describe('Main node prompt/instructions. For enableNodes=true agents, nodes[0].instructions is the canonical system prompt.'),
+    name: z.string().optional().describe('Human-readable node name.'),
+  })
+  .passthrough();
+
+const AgentVoiceConfigSchema = z
+  .object({
+    transcriber: z
+      .object({
+        provider: z
+          .string()
+          .optional()
+          .describe('Speech-to-text provider, e.g. deepgram, gladia, assemblyai, speechmatics, google-cloud-speech.'),
+        modelId: z.string().optional().describe('Provider-specific transcription model ID.'),
+        language: z.string().optional().describe('BCP-47 or provider language code, e.g. en, en-US.'),
+        patienceFactor: z.number().optional().describe('Optional speech endpointing / patience tuning.'),
+        speechConfig: z
+          .object({
+            format: z.string().optional(),
+            sampleRate: z.number().optional(),
+            language: z.string().optional(),
+          })
+          .passthrough()
+          .optional()
+          .describe('Provider-specific speech input configuration.'),
+        randomOptions: z.any().optional().describe('Provider-specific passthrough options.'),
+      })
+      .passthrough()
+      .optional()
+      .describe('Speech-to-text / transcription settings.'),
+    speechGen: z
+      .object({
+        provider: z
+          .string()
+          .optional()
+          .describe('Text-to-speech provider, e.g. elevenlabs, deepgram, cartesia.'),
+        modelId: z.string().optional().describe('Provider-specific TTS model ID.'),
+        voiceId: z.string().optional().describe('Provider-specific voice ID.'),
+        apiKey: z.string().optional().describe('Optional provider API key override. Prefer workspace integrations when available.'),
+        region: z.string().optional().describe('Provider-specific region.'),
+        highAudioQuality: z.boolean().optional().describe('Enable higher-quality audio generation where supported.'),
+        backgroundNoise: z.enum(['restaurant', 'office', 'park', 'street']).optional(),
+        punctuationBreaks: z.array(z.string()).optional().describe('Punctuation tokens that should create speech breaks.'),
+        platformSpecific: z.any().optional().describe('Provider-specific passthrough options.'),
+      })
+      .passthrough()
+      .optional()
+      .describe('Text-to-speech / speech generation settings.'),
+    config: z
+      .object({
+        recordAudio: z.boolean().optional().describe('Whether voice calls should be recorded.'),
+        enableWebCalling: z.boolean().optional().describe('Enable browser/web calling for this agent.'),
+        backgroundNoise: z.enum(['restaurant', 'office', 'park', 'street']).optional(),
+        firstInputChunkUNIXMs: z.number().optional().describe('Runtime timing field; usually read-only.'),
+        firstOutputChunkUNIXMs: z.number().optional().describe('Runtime timing field; usually read-only.'),
+      })
+      .passthrough()
+      .optional()
+      .describe('General voice/call settings.'),
+  })
+  .passthrough();
+
 const CreateAgentSchema = z.object({
   title: z.string().describe('The title of the agent'),
   description: z.string().optional().describe('A brief description of the agent'),
@@ -38,9 +106,12 @@ const CreateAgentSchema = z.object({
   light: z.boolean().optional().describe('Enable light mode (no chat history retention)'),
   enableVertex: z.boolean().optional().describe('Enable Vertex AI'),
   autoOpenWidget: z.boolean().optional().describe('Auto-open widget on load'),
-  voiceConfig: z.record(z.any()).optional().describe('Voice configuration object'),
-  nodes: z.array(z.any()).optional().describe('Agent nodes; nodes[0].instructions is the main prompt'),
-  additionalConfig: z.record(z.any()).optional().describe('Additional agent configuration merged into agent'),
+  enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
+  vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
+  vg_enableUIEngine: z.boolean().optional().describe('Enable structured UI Engine responses for this agent'),
+  voiceConfig: AgentVoiceConfigSchema.optional().describe('Agent voice configuration for transcription, speech generation, and call settings'),
+  nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions is the canonical main/system prompt'),
+  additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; not a primary API concept'),
 });
 
 const GetAgentSchema = z.object({
@@ -56,9 +127,12 @@ const UpdateAgentSchema = z.object({
   light: z.boolean().optional().describe('Updated light mode setting'),
   enableVertex: z.boolean().optional().describe('Updated Vertex AI setting'),
   autoOpenWidget: z.boolean().optional().describe('Updated auto-open widget setting'),
-  voiceConfig: z.record(z.any()).optional().describe('Updated voice configuration'),
-  nodes: z.array(z.any()).optional().describe('Agent nodes; nodes[0].instructions updates the main prompt'),
-  additionalConfig: z.record(z.any()).optional().describe('Additional configuration merged into agent'),
+  enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
+  vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
+  vg_enableUIEngine: z.boolean().optional().describe('Enable or disable structured UI Engine responses for this agent'),
+  voiceConfig: AgentVoiceConfigSchema.optional().describe('Updated agent voice configuration'),
+  nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions updates the canonical main/system prompt'),
+  additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; use explicit fields when available'),
 });
 
 const DeleteAgentSchema = z.object({
@@ -118,6 +192,131 @@ const UpdateConversationSchema = z.object({
   agentId: z.string().describe('The agent ID'),
   convoId: z.string().describe('The conversation ID'),
   conversation: z.any().describe('Conversation fields to update'),
+});
+
+const ConversationTurnFromValues = ['system', 'bot', 'human'] as const;
+const ConversationMessageTypeValues = [
+  'launch',
+  'text',
+  'choice',
+  'MultiSelect',
+  'cardV2',
+  'carousel',
+  'visual',
+  'GetBrowserData',
+  'Embed',
+  'location',
+  'iFrame',
+  'FileUpload',
+  'MultiFileUpload',
+  'GoogleForm',
+  'EmailForm',
+  'SetConvoData',
+  'VoiceNote',
+  'SetRuntime',
+  'no-reply',
+  'VGVF_Channel',
+  'VFVG_Channel',
+  'VG_Response',
+  'knowledgeBase',
+  'jsx',
+  'Flowise',
+  'MultiDropdown',
+  'Slider',
+  'Attachment',
+  'info:default',
+  'info:success',
+  'info:danger',
+  'info:primary',
+  'end',
+  'debug',
+  'stealth',
+  'debug:success',
+  'debug:error',
+  'debug:tell',
+  'context:form_submission',
+  'file',
+  'browser_capture',
+] as const;
+
+const ConversationMessageSchema = z
+  .object({
+    type: z.enum(ConversationMessageTypeValues).describe('Stored message type.'),
+    mid: z.string().optional().describe('Channel/native message ID (MID/WAMID/etc.) when known.'),
+    from: z.enum(ConversationTurnFromValues).optional().describe('Message sender.'),
+    item: z
+      .object({
+        type: z.string().optional().describe('Inner UI/message item type. Often mirrors `type`.'),
+        payload: z.any().optional().describe('Inner payload, e.g. { message: "..." } for text.'),
+        time: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+    delay: z.number().optional(),
+    action: z.string().optional(),
+    ts: z.number().optional().describe('Unix timestamp in seconds.'),
+    feedback: z.boolean().optional(),
+    VGPayload: z.record(z.any()).optional(),
+    isLoading: z.boolean().optional(),
+    isAIGenerated: z.boolean().optional(),
+    sourceLabel: z.string().optional(),
+    placeholderImage: z.string().optional(),
+    mask: z
+      .object({
+        messageIndex: z.number(),
+        turnIndex: z.number(),
+      })
+      .optional(),
+    sendError: z
+      .object({
+        message: z.string(),
+        ts: z.number(),
+      })
+      .optional(),
+    replyTo: z
+      .object({
+        messageId: z.string(),
+        messageContent: z.string(),
+        messageFrom: z.string(),
+        messageIndex: z.number(),
+        turnIndex: z.number(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+const ConversationTurnSchema = z
+  .object({
+    from: z.enum(ConversationTurnFromValues).describe('Turn sender.'),
+    messages: z.array(ConversationMessageSchema).describe('Messages inside this turn.'),
+    ts: z.number().optional().describe('Unix timestamp in seconds.'),
+    session_id: z.string().optional(),
+    isAIGenerated: z.boolean().optional(),
+    modelId: z.string().optional(),
+    sources: z.array(z.record(z.any())).optional(),
+    langchainMessages: z.array(z.record(z.any())).optional(),
+  })
+  .passthrough();
+
+const UpdateConversationMessagesSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  convoId: z.string().describe('The conversation ID'),
+  turns: z
+    .array(ConversationTurnSchema)
+    .describe(
+      'Complete replacement turn history. This replaces voiceglow/{agentId}/convos/{convoId}/convo/JSON_STRING.'
+    ),
+  lgMessages: z.array(z.any()).optional().describe('Optional LangGraph/langchain message array passthrough.'),
+  updateConversationMetadata: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'When true, refresh messagesNum, lastMessage, firstMessageTS, lastMessageTS, and lastModified on the light conversation document.'
+    ),
+  confirmReplace: z
+    .literal(true)
+    .describe('Must be true because this replaces the stored conversation message history.'),
 });
 
 const DeleteConversationSchema = z.object({
@@ -560,6 +759,16 @@ const GetUiEngineSpecSchema = z.object({
     ),
 });
 
+const GetChannelIntegrationSpecSchema = z.object({
+  section: z
+    .enum(['all', 'meta', 'whatsapp', 'metaPages', 'sms'])
+    .optional()
+    .default('all')
+    .describe(
+      'Which channel integration reference to return. meta=overview, whatsapp=waNumbers, metaPages=Facebook Messenger/Instagram, sms=Twilio SMS.'
+    ),
+});
+
 const PricingSection = z.enum([
   'all',
   'plans',
@@ -606,11 +815,120 @@ const RunCommandSchema = z.object({
     .describe('Kill the process after this many seconds. Default 30, max 600.'),
 });
 
+const AgentNodeInputSchema = {
+  type: 'object',
+  description:
+    'One agent node. For enableNodes=true agents, the FIRST node (nodes[0]) contains the canonical main/system prompt in instructions.',
+  properties: {
+    instructions: {
+      type: 'string',
+      description:
+        'Node prompt/instructions. For enableNodes=true agents, nodes[0].instructions is the main behavior prompt.',
+    },
+    name: {
+      type: 'string',
+      description: 'Optional human-readable node name.',
+    },
+  },
+  additionalProperties: true,
+} as const;
+
+const AgentVoiceConfigInputSchema = {
+  type: 'object',
+  description:
+    'Agent voiceConfig for voice-capable agents. Integrations/API keys generally live at workspace/org level; this config selects providers, models, voices, and call behavior for the agent.',
+  properties: {
+    transcriber: {
+      type: 'object',
+      description: 'Speech-to-text / transcription settings.',
+      properties: {
+        provider: {
+          type: 'string',
+          description:
+            'Transcriber provider, e.g. deepgram, gladia, assemblyai, speechmatics, google-cloud-speech.',
+        },
+        modelId: { type: 'string', description: 'Provider-specific transcription model ID.' },
+        language: { type: 'string', description: 'Language code, e.g. en, en-US.' },
+        patienceFactor: {
+          type: 'number',
+          description: 'Optional endpointing / patience tuning for transcription.',
+        },
+        speechConfig: {
+          type: 'object',
+          description: 'Provider-specific speech input config, e.g. format, sampleRate, language.',
+          additionalProperties: true,
+        },
+        randomOptions: {
+          description: 'Provider-specific passthrough options.',
+        },
+      },
+      additionalProperties: true,
+    },
+    speechGen: {
+      type: 'object',
+      description: 'Text-to-speech / speech generation settings.',
+      properties: {
+        provider: {
+          type: 'string',
+          description: 'TTS provider, e.g. elevenlabs, deepgram, cartesia.',
+        },
+        modelId: { type: 'string', description: 'Provider-specific TTS model ID.' },
+        voiceId: { type: 'string', description: 'Provider-specific voice ID.' },
+        apiKey: {
+          type: 'string',
+          description: 'Optional provider API key override. Prefer workspace integrations when available.',
+        },
+        region: { type: 'string', description: 'Provider-specific region.' },
+        highAudioQuality: {
+          type: 'boolean',
+          description: 'Enable higher-quality audio generation where supported.',
+        },
+        backgroundNoise: {
+          type: 'string',
+          enum: ['restaurant', 'office', 'park', 'street'],
+        },
+        punctuationBreaks: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Punctuation tokens that should create speech breaks.',
+        },
+        platformSpecific: {
+          description: 'Provider-specific passthrough options.',
+        },
+      },
+      additionalProperties: true,
+    },
+    config: {
+      type: 'object',
+      description: 'General voice/call settings for the agent.',
+      properties: {
+        recordAudio: { type: 'boolean', description: 'Whether voice calls should be recorded.' },
+        enableWebCalling: { type: 'boolean', description: 'Enable browser/web calling for this agent.' },
+        backgroundNoise: {
+          type: 'string',
+          enum: ['restaurant', 'office', 'park', 'street'],
+        },
+        firstInputChunkUNIXMs: {
+          type: 'number',
+          description: 'Runtime timing field; usually read-only.',
+        },
+        firstOutputChunkUNIXMs: {
+          type: 'number',
+          description: 'Runtime timing field; usually read-only.',
+        },
+      },
+      additionalProperties: true,
+    },
+  },
+  additionalProperties: true,
+} as const;
+
 // Define MCP tools
 const tools: Tool[] = [
   {
     name: 'create_agent',
-    description: 'Create a new ConvoCore AI agent. IMPORTANT: ConvoCore uses "nodes" for advanced AI - the FIRST node in the nodes array contains the MAIN prompt/instructions that control the agent. When creating an agent, set nodes[0].instructions for the primary behavior.',
+    description:
+      'Create a new ConvoCore AI agent. Agent prompt rule: when enableNodes=true, the canonical main/system prompt is nodes[0].instructions. For legacy/non-node agents (enableNodes=false or missing nodes), the rare fallback prompt field is vg_instructions. ownerID/workspaceId is read-only and must not be set here. Integrations live on the workspace/org/client level, not the agent document.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -642,17 +960,32 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Auto-open widget when agent loads',
         },
-        voiceConfig: {
-          type: 'object',
-          description: 'Voice configuration for the agent (transcriber, speechGen, etc.)',
+        enableNodes: {
+          type: 'boolean',
+          description:
+            'Enable node-based agent behavior. If true, put the main prompt in nodes[0].instructions. If false/legacy, use vg_instructions.',
         },
+        vg_instructions: {
+          type: 'string',
+          description:
+            'Legacy main prompt field for old/non-node agents. For modern enableNodes=true agents, use nodes[0].instructions instead.',
+        },
+        vg_enableUIEngine: {
+          type: 'boolean',
+          description:
+            'Enable structured UI Engine output for this agent. When true, /interact returns UI Engine snapshots unless disableUiEngine=true is passed for a turn. Call get_ui_engine_spec for the full message schema.',
+        },
+        voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
-          description: 'Agent nodes array. The FIRST node (nodes[0]) should contain the main prompt in its instructions field. Example: [{ instructions: "Main agent prompt", name: "Main Node" }]',
+          items: AgentNodeInputSchema,
+          description:
+            'Agent nodes array. For enableNodes=true agents, the FIRST node (nodes[0]) should contain the main prompt in its instructions field. Example: [{ "instructions": "Main agent prompt", "name": "Main Node" }].',
         },
         additionalConfig: {
           type: 'object',
-          description: 'Additional agent configuration fields',
+          description:
+            'Escape hatch for raw agent fields not modeled by this MCP yet. This is not a primary ConvoCore concept; prefer explicit fields like enableNodes, vg_instructions, vg_enableUIEngine, nodes, and voiceConfig. Never set read-only fields like ownerID here.',
         },
       },
       required: ['title'],
@@ -660,7 +993,8 @@ const tools: Tool[] = [
   },
   {
     name: 'get_agent',
-    description: 'Retrieve details of a specific ConvoCore agent. NOTE: The agent\'s main prompt is in nodes[0].instructions (first node in nodes array).',
+    description:
+      'Retrieve details of a specific ConvoCore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -674,7 +1008,8 @@ const tools: Tool[] = [
   },
   {
     name: 'update_agent',
-    description: 'Update an existing ConvoCore agent. CRITICAL: To change the agent\'s main prompt/instructions, update nodes[0].instructions (first node in nodes array). This is the PRIMARY prompt that controls agent behavior. Other nodes are for advanced multi-step workflows.',
+    description:
+      'Update an existing ConvoCore agent. CRITICAL prompt rule: first get_agent when unsure. If enableNodes=true, update nodes[0].instructions to change the canonical main/system prompt. If enableNodes=false or the agent is old and has no nodes, update legacy vg_instructions instead. ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -710,17 +1045,32 @@ const tools: Tool[] = [
           type: 'boolean',
           description: 'Updated auto-open widget setting',
         },
-        voiceConfig: {
-          type: 'object',
-          description: 'Updated voice configuration',
+        enableNodes: {
+          type: 'boolean',
+          description:
+            'Enable/disable node-based behavior. If true, the main prompt comes from nodes[0].instructions. If false/legacy, vg_instructions is used.',
         },
+        vg_instructions: {
+          type: 'string',
+          description:
+            'Legacy main prompt for old/non-node agents. Only use as the main prompt when enableNodes=false or nodes are absent.',
+        },
+        vg_enableUIEngine: {
+          type: 'boolean',
+          description:
+            'Enable/disable structured UI Engine output for this agent. When true, /interact returns UI Engine snapshots unless disableUiEngine=true is passed for a turn. Call get_ui_engine_spec for the full message schema.',
+        },
+        voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
-          description: 'IMPORTANT: Agent nodes array. To update the main prompt, modify nodes[0].instructions. Example: [{ instructions: "Your new prompt here" }]',
+          items: AgentNodeInputSchema,
+          description:
+            'IMPORTANT: Agent nodes array. For enableNodes=true agents, update nodes[0].instructions to change the canonical main prompt. Include the full intended nodes array if the API replaces arrays. Example: [{ "instructions": "Your new prompt here", "name": "Main Node" }].',
         },
         additionalConfig: {
           type: 'object',
-          description: 'Additional configuration updates',
+          description:
+            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit fields. Never set read-only fields like ownerID/workspaceId here.',
         },
       },
       required: ['agentId'],
@@ -742,7 +1092,8 @@ const tools: Tool[] = [
   },
   {
     name: 'list_agents',
-    description: 'List all your ConvoCore agents - no parameters needed!',
+    description:
+      'List latest/all accessible ConvoCore agents with no filters. For most agent lookup automation, prefer search_agents because it takes workspaceId (same value as agent.ownerID) and supports search/pagination/sorting.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -751,13 +1102,15 @@ const tools: Tool[] = [
   },
   {
     name: 'search_agents',
-    description: 'Search for ConvoCore agents (requires workspaceId from dashboard)',
+    description:
+      'Search/filter ConvoCore agents. Prefer this for most automation. workspaceId is the same value as agent.ownerID (ownerID is read-only on the agent document). Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description: 'Your workspace/org ID (get this from ConvoCore dashboard)',
+          description:
+            'Workspace/org ID. This is the same value as agent.ownerID on returned agents; ownerID is read-only and must not be patched.',
         },
         search: {
           type: 'string',
@@ -785,7 +1138,8 @@ const tools: Tool[] = [
   },
   {
     name: 'export_agent',
-    description: 'Export an agent template for backup or migration',
+    description:
+      'Export an agent template for backup or migration. For import/export, rely on these dedicated OpenAPI routes instead of trying to manually construct the template shape.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -799,13 +1153,15 @@ const tools: Tool[] = [
   },
   {
     name: 'import_agent',
-    description: 'Import an agent from a template',
+    description:
+      'Import an agent from a template produced by export_agent / the OpenAPI export-template route. The template shape is complex; do not invent it manually unless the user provides an exact exported object.',
     inputSchema: {
       type: 'object',
       properties: {
         agentTemplate: {
           type: 'object',
-          description: 'The agent template object (from export)',
+          description:
+            'Agent template object from export_agent / export-template. Pass the exported template object through; do not manually invent nested template fields.',
         },
         agentName: {
           type: 'string',
@@ -813,7 +1169,7 @@ const tools: Tool[] = [
         },
         fromAgentId: {
           type: 'string',
-          description: 'Optional source agent ID',
+          description: 'Optional source agent ID to preserve import lineage/context when the backend supports it.',
         },
       },
       required: ['agentTemplate', 'agentName'],
@@ -908,7 +1264,8 @@ const tools: Tool[] = [
   },
   {
     name: 'update_conversation',
-    description: 'Update an existing conversation',
+    description:
+      'Patch fields on the light conversation document. This does NOT replace the stored turn/message history. To replace transcript turns, use update_conversation_messages.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -926,6 +1283,135 @@ const tools: Tool[] = [
         },
       },
       required: ['agentId', 'convoId', 'conversation'],
+    },
+  },
+  {
+    name: 'update_conversation_messages',
+    description:
+      'Replace the stored message turn history for a conversation using PATCH /agents/{agentId}/convos/{convoId}/messages. This overwrites voiceglow/{agentId}/convos/{convoId}/convo/JSON_STRING with the provided `turns` array. Set updateConversationMetadata=true (default) to also refresh messagesNum, lastMessage, firstMessageTS, lastMessageTS, and lastModified on the light conversation doc. Because this is a full replacement, confirmReplace must be true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID.',
+        },
+        convoId: {
+          type: 'string',
+          description: 'The conversation ID.',
+        },
+        turns: {
+          type: 'array',
+          description:
+            'Complete replacement turn history. Each turn requires from + messages. This array becomes the stored transcript history.',
+          items: {
+            type: 'object',
+            properties: {
+              from: {
+                type: 'string',
+                enum: ConversationTurnFromValues as unknown as string[],
+                description: 'Turn sender.',
+              },
+              messages: {
+                type: 'array',
+                description: 'Messages in this turn.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    type: {
+                      type: 'string',
+                      enum: ConversationMessageTypeValues as unknown as string[],
+                      description: 'Stored message type.',
+                    },
+                    mid: {
+                      type: 'string',
+                      description: 'Optional channel/native message ID (MID/WAMID/etc.).',
+                    },
+                    from: {
+                      type: 'string',
+                      enum: ConversationTurnFromValues as unknown as string[],
+                    },
+                    item: {
+                      type: 'object',
+                      description:
+                        'Inner message item, usually { type, payload }. For text: { "payload": { "message": "..." } }.',
+                      properties: {
+                        type: { type: 'string' },
+                        payload: {
+                          description: 'Message payload. For text messages, use { "message": "..." }.',
+                        },
+                        time: { type: 'number' },
+                      },
+                      additionalProperties: true,
+                    },
+                    delay: { type: 'number' },
+                    action: { type: 'string' },
+                    ts: { type: 'number', description: 'Unix timestamp in seconds.' },
+                    feedback: { type: 'boolean' },
+                    VGPayload: { type: 'object', additionalProperties: true },
+                    isLoading: { type: 'boolean' },
+                    isAIGenerated: { type: 'boolean' },
+                    sourceLabel: { type: 'string' },
+                    placeholderImage: { type: 'string' },
+                    mask: {
+                      type: 'object',
+                      properties: {
+                        messageIndex: { type: 'number' },
+                        turnIndex: { type: 'number' },
+                      },
+                    },
+                    sendError: {
+                      type: 'object',
+                      properties: {
+                        message: { type: 'string' },
+                        ts: { type: 'number' },
+                      },
+                      required: ['message', 'ts'],
+                    },
+                    replyTo: {
+                      type: 'object',
+                      properties: {
+                        messageId: { type: 'string' },
+                        messageContent: { type: 'string' },
+                        messageFrom: { type: 'string' },
+                        messageIndex: { type: 'number' },
+                        turnIndex: { type: 'number' },
+                      },
+                      required: ['messageId', 'messageContent', 'messageFrom', 'messageIndex', 'turnIndex'],
+                    },
+                  },
+                  required: ['type'],
+                  additionalProperties: true,
+                },
+              },
+              ts: { type: 'number', description: 'Unix timestamp in seconds.' },
+              session_id: { type: 'string' },
+              isAIGenerated: { type: 'boolean' },
+              modelId: { type: 'string' },
+              sources: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              langchainMessages: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+            required: ['from', 'messages'],
+            additionalProperties: true,
+          },
+        },
+        lgMessages: {
+          type: 'array',
+          description: 'Optional LangGraph/langchain message array passthrough.',
+          items: {},
+        },
+        updateConversationMetadata: {
+          type: 'boolean',
+          description:
+            'Default true. Refreshes messagesNum, lastMessage, firstMessageTS, lastMessageTS, and lastModified on the light conversation document.',
+        },
+        confirmReplace: {
+          type: 'boolean',
+          const: true,
+          description: 'Must be true because this replaces the stored conversation message history.',
+        },
+      },
+      required: ['agentId', 'convoId', 'turns', 'confirmReplace'],
     },
   },
   {
@@ -1739,8 +2225,9 @@ const tools: Tool[] = [
   {
     name: 'buy_twilio_number',
     description:
-      "Purchase a new Twilio phone number from Convocore's Twilio account and assign it to the workspace. " +
+      "Purchase a new Twilio phone number from Convocore's Twilio account and assign it to the workspace for SMS/voice. " +
       'Requires an available phone-number slot on your plan (Twilio Phone Number add-on is $3/month per extra number). ' +
+      'This is NOT for WhatsApp Cloud API numbers; WhatsApp uses waNumbers/{phoneId} and Meta credentials. ' +
       'Tip: discover purchasable numbers via the platform UI / available-numbers endpoint before calling this.',
     inputSchema: {
       type: 'object',
@@ -1762,7 +2249,8 @@ const tools: Tool[] = [
   {
     name: 'import_twilio_number',
     description:
-      'Import a Twilio number you already own into the workspace (uses your Twilio account credentials). ' +
+      'Import a Twilio SMS/voice number you already own into the workspace (uses your Twilio account credentials). ' +
+      'This is NOT a WhatsApp Cloud API connection; do not use it for waNumbers/Meta WhatsApp. ' +
       'Pass the full request body for /utils/import-twilio-number as an object — typically includes your Twilio account SID, auth token, the phone number, optional agentId and capabilities.',
     inputSchema: {
       type: 'object',
@@ -1775,7 +2263,7 @@ const tools: Tool[] = [
   {
     name: 'release_twilio_number',
     description:
-      'Release (delete) a Twilio number from the workspace. Pass the full request body for /utils/twilio/release-number as an object — typically includes phoneNumber or phoneNumberSid.',
+      'Release (delete) a Twilio SMS/voice number from the workspace. This does not remove WhatsApp Cloud API waNumbers. Pass the full request body for /utils/twilio/release-number as an object — typically includes phoneNumber or phoneNumberSid.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1787,7 +2275,7 @@ const tools: Tool[] = [
   {
     name: 'check_twilio_number',
     description:
-      'Repair / re-sync the Twilio webhook configuration for a number (useful when call routing breaks). ' +
+      'Repair / re-sync the Twilio SMS/voice webhook configuration for a number (useful when call/SMS routing breaks). This does not check WhatsApp Cloud API health. ' +
       'Pass the full request body for /utils/twilio/check-number as an object — typically includes phoneNumber or phoneNumberSid.',
     inputSchema: {
       type: 'object',
@@ -1800,7 +2288,7 @@ const tools: Tool[] = [
   {
     name: 'sync_sms_twilio_number',
     description:
-      'Assign a Twilio number to an agent for SMS handling. Pass the full request body for /utils/twilio/sync-sms as an object — typically includes phoneNumber (or sid) and agentId.',
+      'Assign a Twilio number to an agent for SMS handling. This is SMS only; WhatsApp routing uses waNumbers/{phoneId}, origin "whatsapp", and Meta Cloud API. Pass the full request body for /utils/twilio/sync-sms as an object — typically includes phoneNumber (or sid) and agentId.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1983,6 +2471,22 @@ const tools: Tool[] = [
           enum: ['text', 'choice', 'visual', 'cardV2', 'carousel', 'iFrame', 'form', 'input'],
           description:
             'When set, return only the schema for this message type (overrides section). Use when you only need one shape.',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_channel_integration_spec',
+    description:
+      'Return static Convocore channel-integration schema guidance for MCP clients. Use this before configuring or explaining WhatsApp, Facebook Messenger, Instagram, or SMS routing. It clarifies canonical storage locations, safe update fields, read-only/system-managed fields, credential masking, WhatsApp coexistence/AI behavior settings, Messenger/Instagram page mapping, and why Twilio SMS tools must not be used for WhatsApp Cloud API numbers. Static knowledge — does NOT hit the API.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: {
+          type: 'string',
+          enum: ['all', 'meta', 'whatsapp', 'metaPages', 'sms'],
+          description:
+            'Which section to return. "whatsapp" covers waNumbers, coexistence, AI reply controls, voice settings, safe patch matrix, and recommended tools. "metaPages" covers Facebook Messenger/Instagram page docs. "sms" covers Twilio SMS separation.',
         },
       },
     },
@@ -2320,6 +2824,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validated.convoId,
           validated.conversation
         );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'update_conversation_messages': {
+        const validated = UpdateConversationMessagesSchema.parse(args);
+        const { agentId, convoId, confirmReplace: _confirmReplace, ...payload } = validated;
+        const result = await client.updateConversationMessages(agentId, convoId, payload);
         return {
           content: [
             {
@@ -3076,6 +3594,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               break;
           }
         }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+        };
+      }
+
+      case 'get_channel_integration_spec': {
+        const validated = GetChannelIntegrationSpecSchema.parse(args ?? {});
+        const section = validated.section ?? 'all';
+        const payload =
+          section === 'all'
+            ? CHANNEL_INTEGRATION_SPEC
+            : {
+                section,
+                spec: CHANNEL_INTEGRATION_SPEC[section],
+              };
 
         return {
           content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],

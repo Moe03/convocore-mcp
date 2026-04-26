@@ -312,6 +312,27 @@ export class ConvoCoreClient {
   }
 
   /**
+   * Replace the stored turn/message history for a conversation.
+   * Writes to voiceglow/{agentId}/convos/{convoId}/convo/JSON_STRING via
+   * the V3 /messages endpoint. This is separate from updateConversation,
+   * which only patches the light conversation document.
+   */
+  async updateConversationMessages(
+    agentId: string,
+    convoId: string,
+    payload: {
+      turns: any[];
+      updateConversationMetadata?: boolean;
+      lgMessages?: any[];
+    }
+  ): Promise<any> {
+    return this.request<any>(`/agents/${agentId}/convos/${convoId}/messages`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
    * Delete a conversation
    */
   async deleteConversation(agentId: string, convoId: string): Promise<any> {

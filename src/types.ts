@@ -18,14 +18,14 @@ export interface ConvoCoreConfig {
 
 export interface VoiceConfig {
   transcriber?: {
-    provider: string;
+    provider?: string;
     modelId?: string;
     language?: string;
     apiKey?: string;
     [key: string]: any;
   };
   speechGen?: {
-    provider: string;
+    provider?: string;
     modelId?: string;
     voiceId?: string;
     apiKey?: string;
@@ -33,7 +33,7 @@ export interface VoiceConfig {
     [key: string]: any;
   };
   config?: {
-    recordAudio: boolean;
+    recordAudio?: boolean;
     backgroundNoise?: string;
     enableWebCalling?: boolean;
     [key: string]: any;
@@ -46,8 +46,16 @@ export interface Agent {
   title?: string;
   description?: string;
   theme?: string;
+  /** Workspace/org ID. Read-only on the agent document. */
   ownerID?: string;
   voiceConfig?: VoiceConfig;
+  /** If true, the main prompt is nodes[0].instructions. */
+  enableNodes?: boolean;
+  /** Legacy main prompt for old/non-node agents. */
+  vg_instructions?: string;
+  /** Enables structured UI Engine output on /interact. */
+  vg_enableUIEngine?: boolean;
+  nodes?: Array<{ instructions?: string; name?: string; [key: string]: any }>;
   light?: boolean;
   enableVertex?: boolean;
   autoOpenWidget?: boolean;
@@ -64,6 +72,10 @@ export interface CreateAgentPayload {
     description?: string;
     theme?: string;
     voiceConfig?: VoiceConfig;
+    enableNodes?: boolean;
+    vg_instructions?: string;
+    vg_enableUIEngine?: boolean;
+    nodes?: Array<{ instructions?: string; name?: string; [key: string]: any }>;
     light?: boolean;
     enableVertex?: boolean;
     autoOpenWidget?: boolean;
