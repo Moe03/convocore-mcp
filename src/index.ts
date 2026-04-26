@@ -98,6 +98,8 @@ const AgentVoiceConfigSchema = z
   })
   .passthrough();
 
+const AgentTemplateValues = ['blank', 'customer_support', 'real_estate', 'healthcare_secretary', 'game_npc'] as const;
+
 const CreateAgentSchema = z.object({
   title: z.string().describe('The title of the agent'),
   description: z.string().optional().describe('A brief description of the agent'),
@@ -112,6 +114,22 @@ const CreateAgentSchema = z.object({
   voiceConfig: AgentVoiceConfigSchema.optional().describe('Agent voice configuration for transcription, speech generation, and call settings'),
   nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions is the canonical main/system prompt'),
   additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; not a primary API concept'),
+});
+
+const CreateAgentFromTemplateSchema = z.object({
+  workspaceId: z.string().describe('Workspace ID used for the scrape step'),
+  url: z.string().url().describe('Website URL to scrape before generating the agent prompt'),
+  template: z.enum(AgentTemplateValues).optional().default('customer_support').describe('Backbone template to use'),
+  title: z.string().optional().describe('Optional agent title override'),
+  description: z.string().optional().describe('Optional agent description override'),
+  theme: z.string().optional().default('blue-light').describe('Visual theme'),
+  language: z.string().optional().default('en').describe('Primary language for the agent'),
+  roundedImageURL: z.string().url().optional().describe('Optional avatar/logo URL'),
+  chatBgURL: z.string().url().optional().describe('Optional chat background image URL'),
+  branding: z.string().optional().describe('Optional branding label'),
+  proactiveMessage: z.string().optional().describe('Optional proactive greeting bubble text'),
+  createKbUrlDoc: z.boolean().optional().default(true).describe('If true, add the URL as a KB document after creating the agent'),
+  additionalConfig: z.record(z.any()).optional().describe('Optional extra agent fields to merge in last'),
 });
 
 const GetAgentSchema = z.object({
@@ -389,66 +407,11 @@ const GetKBStatsSchema = z.object({
   agentId: z.string().describe('The agent ID'),
 });
 
-// ==================== CRAWLER SCHEMAS ====================
+// ==================== SCRAPE SCHEMAS ====================
 
-const CrawlerWebhookEventValues = ['page_scraped', 'job_completed', 'job_failed'] as const;
-const CrawlerWebhookEventSchema = z.enum(CrawlerWebhookEventValues);
-
-const CrawlerCrawlOptionsSchema = z.object({
-  maxPages: z.number().int().min(1).max(500).optional().describe('Maximum number of pages the crawler can process'),
-  urlMatchers: z.array(z.string()).optional().describe('URL path matchers that define which pages are in scope'),
-  unMatchers: z.array(z.string()).optional().describe('URL path matchers that should be excluded'),
-  stayOnDomain: z.boolean().optional().describe('If true, only pages on the same domain are crawled'),
-}).optional().describe('Optional crawl behavior settings');
-
-const CrawlerWebhookSchema = z.object({
-  url: z.string().url().describe('HTTPS endpoint that should receive crawler callbacks'),
-  events: z.array(CrawlerWebhookEventSchema).min(1).optional().describe('Webhook events to deliver'),
-  secret: z.string().optional().describe('Optional secret mirrored back in crawler webhook headers'),
-  bearerToken: z.string().optional().describe('Optional bearer token sent as the Authorization header'),
-  headers: z.record(z.string()).optional().describe('Optional additional headers sent with each webhook request'),
-}).optional().describe('Optional outbound webhook configuration');
-
-const CreateCrawlerJobSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler job'),
-  urls: z.array(z.string().url()).min(1).describe('One or more source URLs to scrape or use as crawl entry points'),
-  crawl: z.boolean().optional().describe('If true, discovered URLs can be followed and scraped as part of the same job'),
-  crawlOptions: CrawlerCrawlOptionsSchema,
-  deep: z.boolean().optional().describe('If true, use deep scraping behavior'),
-  useProxy: z.boolean().optional().describe('If true, the crawler uses proxy scraping and paid proxy pricing'),
-  refreshRate: z.string().optional().describe('Optional refresh cadence for KB-linked scrapes'),
-  toAgentId: z.string().optional().describe('Optional single agent destination for KB import'),
-  toAgentIds: z.array(z.string()).optional().describe('Optional list of agent destinations for KB import'),
-  webhook: CrawlerWebhookSchema,
-});
-
-const ListCrawlerJobsSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler jobs'),
-  page: z.number().int().min(1).optional().default(1).describe('Page number'),
-  limit: z.number().int().min(1).max(100).optional().default(20).describe('Results per page'),
-});
-
-const GetCrawlerJobSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler job'),
-  jobId: z.string().describe('The crawler job ID'),
-});
-
-const DeleteCrawlerJobSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler job'),
-  jobId: z.string().describe('The crawler job ID to delete'),
-});
-
-const ListCrawlerJobPagesSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler job'),
-  jobId: z.string().describe('The crawler job ID'),
-  page: z.number().int().min(1).optional().default(1).describe('Page number'),
-  limit: z.number().int().min(1).max(100).optional().default(20).describe('Results per page'),
-});
-
-const GetCrawlerJobPageSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the crawler job'),
-  jobId: z.string().describe('The crawler job ID'),
-  pageId: z.string().describe('The scraped page ID'),
+const ScrapeUrlSchema = z.object({
+  workspaceId: z.string().describe('The workspace that owns the scrape job'),
+  url: z.string().url().describe('The single URL to scrape'),
 });
 
 // ==================== FILE I/O SCHEMAS ====================
@@ -923,12 +886,321 @@ const AgentVoiceConfigInputSchema = {
   additionalProperties: true,
 } as const;
 
+const DEFAULT_MODEL_FOR_TEMPLATE_AGENTS = 'zai-org/GLM-5';
+
+const DEFAULT_GEMINI_LIVE_OPTIONS = {
+  apiConfig: { apiKey: '' },
+  sessionConfig: {
+    model: 'gemini-3.1-flash-live-preview',
+    responseModalities: ['AUDIO'],
+    generationConfig: {
+      temperature: 0.4,
+      topP: 0.6,
+      topK: 32,
+      maxOutputTokens: 512,
+      candidateCount: 1,
+    },
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: { voiceName: 'Puck' },
+      },
+    },
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    realtimeInputConfig: {
+      automaticActivityDetection: {
+        disabled: false,
+        startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+        endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+        prefixPaddingMs: 20,
+        silenceDurationMs: 100,
+      },
+    },
+  },
+  internal: {
+    enableToolPrefillAudio: false,
+  },
+} as const;
+
+const DEFAULT_TEMPLATE_VOICE_CONFIG = {
+  config: {
+    recordAudio: true,
+    enableWebCalling: true,
+    backgroundNoise: 'restaurant',
+  },
+  transcriber: {
+    provider: 'deepgram',
+    modelId: 'nova-2-phonecall',
+    utteranceThreshold: 150,
+    language: 'en',
+  },
+  speechGen: {
+    provider: 'google-live',
+    voiceId: 'Puck',
+  },
+} as const;
+
+type AgentTemplateName = (typeof AgentTemplateValues)[number];
+
+function toDomainLabel(url: string): string {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./i, '');
+    const base = hostname.split('.')[0] || 'Website';
+    return base
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (m) => m.toUpperCase());
+  } catch {
+    return 'Website';
+  }
+}
+
+function extractScrapedText(scrapeResult: any): string {
+  const page = scrapeResult?.data?.page;
+  const candidates: unknown[] = [
+    page?.data?.markdown,
+    page?.data?.md,
+    page?.markdown,
+    page?.md,
+    page?.data?.content,
+    page?.content,
+    page?.data?.text,
+    page?.text,
+    page?.data?.html,
+    page?.html,
+  ];
+
+  const firstText = candidates.find((value) => typeof value === 'string' && value.trim().length > 0);
+  if (!firstText || typeof firstText !== 'string') {
+    return '';
+  }
+
+  const normalized = firstText
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return normalized.slice(0, 6000);
+}
+
+function buildPromptFromScrape(args: {
+  url: string;
+  domainLabel: string;
+  template: AgentTemplateName;
+  scrapedText: string;
+}): string {
+  const base = [
+    `You are the official ${args.domainLabel} support assistant.`,
+    `Ground your answers in information from ${args.url}.`,
+    'Never invent company policies, pricing, or technical details.',
+    'If information is missing, say that clearly and offer to escalate to a human.',
+    'Keep answers concise, clear, and helpful.',
+    'DO NOT output images unless the user explicitly asks for an image.',
+  ];
+
+  if (args.template === 'real_estate') {
+    base.push('When users ask about properties, ask clarifying questions about budget, location, and timeline.');
+  } else if (args.template === 'healthcare_secretary') {
+    base.push('Be empathetic and professional. Do not provide medical diagnosis; focus on admin and booking support.');
+  } else if (args.template === 'game_npc') {
+    base.push('Keep a playful tone while still staying safe and polite.');
+  } else if (args.template === 'customer_support') {
+    base.push('Prioritize troubleshooting steps, account help, and product plan guidance.');
+  }
+
+  if (args.scrapedText.length > 0) {
+    base.push('');
+    base.push('Website context excerpt (sanitized):');
+    base.push(args.scrapedText.slice(0, 2800));
+  }
+
+  return base.join('\n');
+}
+
+function buildTemplateNodes(template: AgentTemplateName, startInstructions: string): Array<Record<string, unknown>> {
+  const startNode = {
+    id: '__start__',
+    name: 'Start',
+    type: 'start',
+    isGlobal: false,
+    instructions: startInstructions,
+    llmConfig: {
+      modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+      temperature: 0.7,
+      maxTokens: 2024,
+    },
+    toolUseBias: 0.5,
+    autoRerouter: { enabled: false, level: 1 },
+    kb: { enabled: true, maxChunks: 3 },
+    toolsIds: [],
+    childrenNodes: [],
+    depth: 0,
+  };
+
+  if (template === 'customer_support') {
+    return [
+      startNode,
+      {
+        name: 'Pricing Expert',
+        description: 'Route here for pricing questions',
+        instructions: 'Answer pricing questions clearly using KB data only.',
+        isGlobal: true,
+        type: 'default',
+        kb: { enabled: true, tags: ['pricing'] },
+        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
+      },
+      {
+        name: 'Features Expert',
+        description: 'Route here for feature questions',
+        instructions: 'Answer feature questions clearly using KB data only.',
+        isGlobal: true,
+        type: 'default',
+        kb: { enabled: true, tags: ['features'] },
+        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
+      },
+    ];
+  }
+
+  if (template === 'real_estate') {
+    return [
+      startNode,
+      {
+        name: 'Units Expert',
+        description: 'Route here for unit/property inventory questions',
+        instructions: 'Use KB data to explain available units and help qualify user intent.',
+        isGlobal: true,
+        type: 'default',
+        kb: { enabled: true, tags: ['units'] },
+        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
+      },
+    ];
+  }
+
+  if (template === 'healthcare_secretary') {
+    return [
+      startNode,
+      {
+        name: 'Appointment Scheduler',
+        description: 'Route here for booking and rescheduling requests',
+        instructions: 'Collect booking details, confirm back to the user, and remain professional.',
+        isGlobal: true,
+        type: 'default',
+        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
+      },
+    ];
+  }
+
+  if (template === 'game_npc') {
+    return [
+      startNode,
+      {
+        name: 'Game Win Node',
+        description: 'Route here when the player wins',
+        instructions: 'Congratulate the user for winning and invite them to restart to play again.',
+        isGlobal: true,
+        type: 'default',
+        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
+      },
+    ];
+  }
+
+  return [startNode];
+}
+
+async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
+  const {
+    workspaceId,
+    url,
+    template,
+    title,
+    description,
+    theme,
+    language,
+    roundedImageURL,
+    chatBgURL,
+    branding,
+    proactiveMessage,
+    createKbUrlDoc,
+    additionalConfig,
+  } = args;
+
+  const scrapeResult = await client.scrapeUrl(workspaceId, url);
+  const domainLabel = toDomainLabel(url);
+  const scrapedText = extractScrapedText(scrapeResult);
+  const startPrompt = buildPromptFromScrape({
+    url,
+    domainLabel,
+    template,
+    scrapedText,
+  });
+  const nodes = buildTemplateNodes(template, startPrompt);
+
+  const payload = {
+    agent: {
+      title: title ?? `${domainLabel} Assistant`,
+      description:
+        description ?? `AI assistant for ${domainLabel}, grounded in ${url}.`,
+      agentPlatform: 'vg',
+      theme,
+      lang: language,
+      enableNodes: true,
+      vg_enableUIEngine: true,
+      vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+      vg_temperature: 0.5,
+      vg_maxTokens: 1024,
+      proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
+      recordChatHistory: true,
+      roundedImageURL,
+      chatBgURL,
+      branding,
+      voiceConfig: DEFAULT_TEMPLATE_VOICE_CONFIG,
+      nodesSettings: {
+        geminiLiveOptions: DEFAULT_GEMINI_LIVE_OPTIONS,
+      },
+      nodes,
+      ...(additionalConfig || {}),
+    },
+  };
+
+  const result = await client.createAgent(payload);
+  const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
+  let kbImportResult: any = null;
+
+  if (createKbUrlDoc && createdAgentId) {
+    kbImportResult = await client.createKBDoc(createdAgentId, {
+      name: `${domainLabel} Website`,
+      sourceType: 'url',
+      urls: [url],
+      scrapeContent: true,
+      refreshRate: 'never',
+    });
+  }
+
+  return {
+    success: (result as any)?.success ?? true,
+    message: 'Template-based agent created from scraped website context.',
+    data: {
+      agent: (result as any)?.data ?? result,
+      templateUsed: template,
+      startPrompt,
+      scrape: {
+        success: scrapeResult.success,
+        timedOut: !!scrapeResult.data?.timedOut,
+        url,
+        excerpt: scrapedText.slice(0, 1200),
+      },
+      kbImport: kbImportResult,
+    },
+  };
+}
+
 // Define MCP tools
 const tools: Tool[] = [
   {
     name: 'create_agent',
     description:
-      'Create a new ConvoCore AI agent. Agent prompt rule: when enableNodes=true, the canonical main/system prompt is nodes[0].instructions. For legacy/non-node agents (enableNodes=false or missing nodes), the rare fallback prompt field is vg_instructions. ownerID/workspaceId is read-only and must not be set here. Integrations live on the workspace/org/client level, not the agent document.',
+      'Create a new ConvoCore AI agent directly from supplied fields (legacy/raw mode). IMPORTANT: for new agents from scratch, first learn the website via scrape and use create_agent_from_template instead. Use this tool only for manual/advanced direct payload control.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -989,6 +1261,73 @@ const tools: Tool[] = [
         },
       },
       required: ['title'],
+    },
+  },
+  {
+    name: 'create_agent_from_template',
+    description:
+      'PREFERRED way to create new agents from scratch. Always starts by scraping the provided website URL so the agent understands what the site is about before creation. Then it synthesizes a start prompt and creates a VG agent from a hardcoded backbone template with branding/title overrides.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: {
+          type: 'string',
+          description: 'Workspace ID used for the scrape step',
+        },
+        url: {
+          type: 'string',
+          format: 'uri',
+          description: 'Website URL to scrape before creating the agent',
+        },
+        template: {
+          type: 'string',
+          enum: [...AgentTemplateValues],
+          description: 'Backbone template key. Default: customer_support',
+        },
+        title: {
+          type: 'string',
+          description: 'Optional agent title override',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional agent description override',
+        },
+        theme: {
+          type: 'string',
+          description: 'Visual theme (default: blue-light)',
+        },
+        language: {
+          type: 'string',
+          description: 'Primary language for the agent (default: en)',
+        },
+        roundedImageURL: {
+          type: 'string',
+          format: 'uri',
+          description: 'Optional avatar/logo URL',
+        },
+        chatBgURL: {
+          type: 'string',
+          format: 'uri',
+          description: 'Optional chat background image URL',
+        },
+        branding: {
+          type: 'string',
+          description: 'Optional branding label',
+        },
+        proactiveMessage: {
+          type: 'string',
+          description: 'Optional proactive greeting bubble text',
+        },
+        createKbUrlDoc: {
+          type: 'boolean',
+          description: 'If true, add the source URL into KB after agent creation',
+        },
+        additionalConfig: {
+          type: 'object',
+          description: 'Optional extra agent fields merged into the final payload',
+        },
+      },
+      required: ['workspaceId', 'url'],
     },
   },
   {
@@ -1675,219 +2014,24 @@ const tools: Tool[] = [
       required: ['agentId'],
     },
   },
-  // ==================== CRAWLER TOOLS ====================
+  // ==================== SCRAPE TOOL ====================
   {
-    name: 'create_crawler_job',
-    description: 'Create a new crawler or scrape job for a workspace. IMPORTANT: crawler jobs are immutable after submission and cannot be updated. To change configuration, delete the existing job and create a new one.',
+    name: 'scrape_url',
+    description: 'Scrape exactly one URL for a workspace and wait for the scrape result before returning. This tool does not follow discovered links and does not expose job options.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description: 'The workspace that owns the crawler job',
+          description: 'The workspace that owns the scrape job',
         },
-        urls: {
-          type: 'array',
-          items: {
-            type: 'string',
-            format: 'uri',
-          },
-          minItems: 1,
-          description: 'One or more source URLs to scrape or use as crawl entry points',
-        },
-        crawl: {
-          type: 'boolean',
-          description: 'If true, discovered URLs can be followed and scraped as part of the same job',
-        },
-        crawlOptions: {
-          type: 'object',
-          description: 'Optional crawl behavior settings',
-          properties: {
-            maxPages: {
-              type: 'number',
-              description: 'Maximum number of pages the crawler is allowed to process (1-500)',
-            },
-            urlMatchers: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'URL path matchers that define which pages are in scope',
-            },
-            unMatchers: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'URL path matchers that should be excluded',
-            },
-            stayOnDomain: {
-              type: 'boolean',
-              description: 'If true, only pages on the same domain are crawled',
-            },
-          },
-        },
-        deep: {
-          type: 'boolean',
-          description: 'If true, use deep scraping behavior',
-        },
-        useProxy: {
-          type: 'boolean',
-          description: 'If true, the crawler uses proxy scraping and paid proxy pricing',
-        },
-        refreshRate: {
+        url: {
           type: 'string',
-          description: 'Optional refresh cadence for KB-linked scrapes',
-        },
-        toAgentId: {
-          type: 'string',
-          description: 'Optional single agent destination for KB import',
-        },
-        toAgentIds: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Optional list of agent destinations for KB import',
-        },
-        webhook: {
-          type: 'object',
-          description: 'Optional outbound webhook that receives crawler events',
-          properties: {
-            url: {
-              type: 'string',
-              format: 'uri',
-              description: 'HTTPS endpoint that should receive crawler callbacks',
-            },
-            events: {
-              type: 'array',
-              items: {
-                type: 'string',
-                enum: [...CrawlerWebhookEventValues],
-              },
-              minItems: 1,
-              description: 'Which crawler events should be delivered to your webhook',
-            },
-            secret: {
-              type: 'string',
-              description: 'Optional secret mirrored back as the x-convocore-crawler-secret header',
-            },
-            bearerToken: {
-              type: 'string',
-              description: 'Optional bearer token sent as the Authorization header',
-            },
-            headers: {
-              type: 'object',
-              additionalProperties: {
-                type: 'string',
-              },
-              description: 'Optional additional headers to send with each webhook request',
-            },
-          },
-          required: ['url'],
+          format: 'uri',
+          description: 'The single URL to scrape',
         },
       },
-      required: ['workspaceId', 'urls'],
-    },
-  },
-  {
-    name: 'list_crawler_jobs',
-    description: 'List crawler jobs for a workspace with pagination. Crawler jobs are immutable after submission; there is no update tool. Delete and recreate a job if you need different settings.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'The workspace that owns the crawler jobs',
-        },
-        page: {
-          type: 'number',
-          description: 'Page number (default: 1)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Results per page (default: 20, max: 100)',
-        },
-      },
-      required: ['workspaceId'],
-    },
-  },
-  {
-    name: 'get_crawler_job',
-    description: 'Get a crawler job by ID, including status, billing estimates, and webhook metadata. Crawler jobs cannot be updated after creation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'The workspace that owns the crawler job',
-        },
-        jobId: {
-          type: 'string',
-          description: 'The crawler job ID',
-        },
-      },
-      required: ['workspaceId', 'jobId'],
-    },
-  },
-  {
-    name: 'delete_crawler_job',
-    description: 'Delete a crawler job and its stored page data. Since crawler jobs are immutable and cannot be updated, delete plus recreate is the supported workflow for changes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'The workspace that owns the crawler job',
-        },
-        jobId: {
-          type: 'string',
-          description: 'The crawler job ID to delete',
-        },
-      },
-      required: ['workspaceId', 'jobId'],
-    },
-  },
-  {
-    name: 'list_crawler_job_pages',
-    description: 'List scraped page summaries for a crawler job with pagination. Crawler jobs are immutable after submission and cannot be updated.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'The workspace that owns the crawler job',
-        },
-        jobId: {
-          type: 'string',
-          description: 'The crawler job ID',
-        },
-        page: {
-          type: 'number',
-          description: 'Page number (default: 1)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Results per page (default: 20, max: 100)',
-        },
-      },
-      required: ['workspaceId', 'jobId'],
-    },
-  },
-  {
-    name: 'get_crawler_job_page',
-    description: 'Get a single scraped page for a crawler job, including markdown/html payload when available. Crawler jobs are immutable after submission and cannot be updated.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'The workspace that owns the crawler job',
-        },
-        jobId: {
-          type: 'string',
-          description: 'The crawler job ID',
-        },
-        pageId: {
-          type: 'string',
-          description: 'The scraped page ID',
-        },
-      },
-      required: ['workspaceId', 'jobId', 'pageId'],
+      required: ['workspaceId', 'url'],
     },
   },
   // ==================== WIDGET CSS TOOLS ====================
@@ -2620,7 +2764,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'create_agent': {
         const validated = CreateAgentSchema.parse(args);
         const { additionalConfig, ...agentFields } = validated;
-        
         const payload = {
           agent: {
             ...agentFields,
@@ -2629,6 +2772,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const result = await client.createAgent(payload);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'create_agent_from_template': {
+        const validated = CreateAgentFromTemplateSchema.parse(args);
+        const result = await createAgentFromTemplateFlow(validated);
         return {
           content: [
             {
@@ -3001,96 +3157,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // ==================== CRAWLER HANDLERS ====================
+      // ==================== SCRAPE HANDLER ====================
 
-      case 'create_crawler_job': {
-        const validated = CreateCrawlerJobSchema.parse(args);
-        const { workspaceId, ...crawlerJobData } = validated;
-        const result = await client.createCrawlerJob(workspaceId, crawlerJobData);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'list_crawler_jobs': {
-        const validated = ListCrawlerJobsSchema.parse(args);
-        const result = await client.listCrawlerJobs(
-          validated.workspaceId,
-          validated.page,
-          validated.limit
-        );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'get_crawler_job': {
-        const validated = GetCrawlerJobSchema.parse(args);
-        const result = await client.getCrawlerJob(
-          validated.workspaceId,
-          validated.jobId
-        );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'delete_crawler_job': {
-        const validated = DeleteCrawlerJobSchema.parse(args);
-        const result = await client.deleteCrawlerJob(
-          validated.workspaceId,
-          validated.jobId
-        );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'list_crawler_job_pages': {
-        const validated = ListCrawlerJobPagesSchema.parse(args);
-        const result = await client.listCrawlerJobPages(
-          validated.workspaceId,
-          validated.jobId,
-          validated.page,
-          validated.limit
-        );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'get_crawler_job_page': {
-        const validated = GetCrawlerJobPageSchema.parse(args);
-        const result = await client.getCrawlerJobPage(
-          validated.workspaceId,
-          validated.jobId,
-          validated.pageId
-        );
+      case 'scrape_url': {
+        const validated = ScrapeUrlSchema.parse(args);
+        const result = await client.scrapeUrl(validated.workspaceId, validated.url);
         return {
           content: [
             {

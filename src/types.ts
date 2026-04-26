@@ -349,3 +349,10 @@ export interface CrawlerPageSummary {
   failed: boolean;
 }
 
+export interface ScrapeUrlResult {
+  job: CrawlerJob;
+  page: any | null;
+  pages: CrawlerPageSummary[];
+  timedOut: boolean;
+}
+

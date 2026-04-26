@@ -12,6 +12,7 @@ import {
   CreateCrawlerJobPayload,
   CrawlerJob,
   CrawlerPageSummary,
+  ScrapeUrlResult,
   ApiResponse,
   ListAgentsResponse,
   ApiError,
@@ -528,6 +529,71 @@ export class ConvoCoreClient {
     return this.request<any>(
       `/workspaces/${workspaceId}/crawler/jobs/${jobId}/pages/${pageId}`
     );
+  }
+
+  /**
+   * Scrape one URL and wait for the crawler service to store the page result.
+   */
+  async scrapeUrl(workspaceId: string, url: string): Promise<ApiResponse<ScrapeUrlResult>> {
+    const created = await this.createCrawlerJob(workspaceId, {
+      urls: [url],
+      crawl: false,
+      deep: false,
+      useProxy: false,
+    });
+
+    const initialJob = created.data;
+    if (!initialJob?.id) {
+      return {
+        success: created.success,
+        message: created.message,
+        data: initialJob
+          ? {
+              job: initialJob,
+              page: null,
+              pages: [],
+              timedOut: false,
+            }
+          : undefined,
+      };
+    }
+
+    const jobId = initialJob.id;
+    const deadline = Date.now() + 120_000;
+    let latestJob = initialJob;
+    let timedOut = false;
+
+    while (!latestJob.done && !latestJob.failed && !latestJob.isCancelled) {
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      const jobResult = await this.getCrawlerJob(workspaceId, jobId);
+      if (jobResult.data) {
+        latestJob = jobResult.data;
+      }
+    }
+
+    const pagesResult = await this.listCrawlerJobPages(workspaceId, jobId, 1, 10);
+    const pages = pagesResult.data?.pages ?? [];
+    const firstPage = pages[0]
+      ? await this.getCrawlerJobPage(workspaceId, jobId, pages[0].id)
+      : null;
+
+    return {
+      success: !latestJob.failed && !latestJob.isCancelled && !timedOut,
+      message: timedOut
+        ? `Scrape job ${jobId} did not finish within 120 seconds`
+        : latestJob.resultError || latestJob.message || `Scrape job ${jobId} finished`,
+      data: {
+        job: latestJob,
+        page: firstPage,
+        pages,
+        timedOut,
+      },
+    };
   }
 
   // ==================== VOICES (TTS) METHODS ====================

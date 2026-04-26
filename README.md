@@ -1,6 +1,6 @@
 # ConvoCore MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **29 tools** for agents, conversations, knowledge bases, and crawler jobs.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **24 tools** for agents, conversations, knowledge bases, and single-URL scraping.
 
 [![npm version](https://img.shields.io/npm/v/convocore-mcp.svg)](https://www.npmjs.com/package/convocore-mcp)
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
@@ -29,7 +29,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Agents | 9 | CRUD, list, search, export/import template, usage stats |
 | Conversations | 8 | CRUD, list with pagination, export (JSON/CSV), assign to user |
 | Knowledge base | 6 | CRUD, list, stats (described in-tool as **VG agents** only) |
-| Crawler | 6 | Create, list, inspect, page through results, and delete immutable crawler jobs |
+| Scrape | 1 | Scrape one URL at a time and return the stored page result in the same tool call |
 | Interact (WS) | 1 | Drive one agent turn over the `/interact` WebSocket and aggregate the streamed result (plain Markdown **and** UI Engine snapshots) |
 | UI Engine | 1 | Static spec for the structured message format agents emit when `vg_enableUIEngine: true` |
 
@@ -246,7 +246,8 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 | Tool | Method | Path / pattern |
 |------|--------|----------------|
-| `create_agent` | POST | `/agents` body `{ agent: { … } }` |
+| `create_agent` | POST | `/agents` body `{ agent: { … } }` (legacy/raw mode) |
+| `create_agent_from_template` | POST workflow | **Preferred** for new agents: scrape URL, synthesize prompt, then create a VG agent from a template backbone |
 | `get_agent` | GET | `/agents/{agentId}` |
 | `update_agent` | PATCH | `/agents/{agentId}` body `{ agent: { … } }` |
 | `delete_agent` | DELETE | `/agents/{agentId}` |
@@ -269,12 +270,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `update_kb_doc` | PATCH | `/agents/{agentId}/kb/{docId}` |
 | `delete_kb_doc` | DELETE | `/agents/{agentId}/kb/{docId}` |
 | `get_kb_stats` | GET | `/agents/{agentId}/kb/stats` |
-| `create_crawler_job` | POST | `/workspaces/{workspaceId}/crawler/jobs` body: crawler job fields |
-| `list_crawler_jobs` | GET | `/workspaces/{workspaceId}/crawler/jobs?page&limit` |
-| `get_crawler_job` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}` |
-| `delete_crawler_job` | DELETE | `/workspaces/{workspaceId}/crawler/jobs/{jobId}` |
-| `list_crawler_job_pages` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages?page&limit` |
-| `get_crawler_job_page` | GET | `/workspaces/{workspaceId}/crawler/jobs/{jobId}/pages/{pageId}` |
+| `scrape_url` | POST/GET | Submits one URL for scraping, waits for completion, then returns the scraped page result |
 | `interact_with_agent` | WSS | `wss://{region}-gcp-api.vg-stuff.com/interact` (single `InteractObject` in, streamed `ChunkMessage`s out) |
 | `get_ui_engine_spec` | n/a | Static reference — does not hit the API |
 
@@ -284,10 +280,19 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Agent tools
 
-**`create_agent`** — Required: `title`. Optional: `description`, `theme`, `disabled`, `light`, `enableVertex`, `autoOpenWidget`, `voiceConfig`, **`nodes`**, `additionalConfig`.
+**`create_agent_from_template`** — **Preferred for almost all from-scratch agent creation.** Required: `workspaceId`, `url`. Optional: `template`, `title`, `description`, `theme`, `language`, `roundedImageURL`, `chatBgURL`, `branding`, `proactiveMessage`, `createKbUrlDoc`, `additionalConfig`.
 
+- Runs pipeline: **scrape URL -> generate start prompt -> create agent from template backbone**.
+- The scrape step happens first so the assistant understands what the website is about before creating the agent.
+- Forces `agentPlatform` to **`vg`**.
+- `template` is one of: `blank`, `customer_support`, `real_estate`, `healthcare_secretary`, `game_npc` (default `customer_support`).
+- `createKbUrlDoc` defaults to `true` and auto-adds the source URL to KB.
+
+**`create_agent`** — Legacy direct mode for advanced/manual payload control. Required: `title`. Optional: `description`, `theme`, `disabled`, `light`, `enableVertex`, `autoOpenWidget`, `voiceConfig`, **`nodes`**, `additionalConfig`.
+
+- Prefer `create_agent_from_template` unless you intentionally need low-level manual field control.
 - **`nodes`:** ConvoCore’s multi-step graph; **`nodes[0].instructions`** is the **main system prompt**.
-- **`additionalConfig`:** Plain object merged into the `agent` payload (same level as other fields). Use for any API fields not listed explicitly.
+- **`additionalConfig`:** Plain object merged into the `agent` payload (same level as other fields). Use for fields not listed explicitly.
 
 **`get_agent`** — Required: `agentId`. Response includes agent JSON; main prompt is under `nodes[0].instructions` when present.
 
@@ -345,31 +350,9 @@ Optional: `metadata`, `tags`, `refreshRate` — `6h` | `12h` | `24h` | `7d` | `n
 
 **`get_kb_stats`** — Required: `agentId`.
 
-### Crawler tools
+### Scrape tool
 
-Crawler jobs are intentionally **immutable** after creation. There is **no** `update_crawler_job` tool. If you need different URLs, crawl settings, or webhook settings, the supported workflow is **delete + recreate**.
-
-**`create_crawler_job`** — Required: `workspaceId`, `urls` (1+ URLs). Optional: `crawl`, `crawlOptions`, `deep`, `useProxy`, `refreshRate`, `toAgentId`, `toAgentIds`, `webhook`.
-
-- **`crawlOptions.maxPages`** — integer `1..500`.
-- **`crawlOptions.urlMatchers`** — include path matchers.
-- **`crawlOptions.unMatchers`** — exclude path matchers.
-- **`crawlOptions.stayOnDomain`** — stay on the source domain.
-- **`webhook.events`** — `page_scraped` | `job_completed` | `job_failed`.
-- **`webhook.secret`** — mirrored back in crawler webhook headers.
-- **`webhook.bearerToken`** — sent as the outbound webhook `Authorization` header.
-- **`webhook.headers`** — extra outbound webhook headers.
-- The API response keeps billing fields like **`creditsPerPage`** and **`estimatedCredits`** intact.
-
-**`list_crawler_jobs`** — Required: `workspaceId`. Optional: `page` (default 1), `limit` (default 20, max 100).
-
-**`get_crawler_job`** — Required: `workspaceId`, `jobId`. Returns the full crawler job state, including counts, webhook metadata, and billing estimates such as `creditsPerPage` / `estimatedCredits`.
-
-**`delete_crawler_job`** — Required: `workspaceId`, `jobId`. Deletes the job **and** its stored page data.
-
-**`list_crawler_job_pages`** — Required: `workspaceId`, `jobId`. Optional: `page` (default 1), `limit` (default 20, max 100). Returns scraped page summaries.
-
-**`get_crawler_job_page`** — Required: `workspaceId`, `jobId`, `pageId`. Returns one scraped page, including markdown / HTML payload when available.
+**`scrape_url`** — Required: `workspaceId`, `url`. Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
 
 ### Interact (WebSocket) tool
 
@@ -473,11 +456,10 @@ Use this BEFORE:
 After configuration, users can ask their assistant things like:
 
 - “List all my ConvoCore agents” → `list_agents`
-- “Create an agent titled X with this prompt …” → `create_agent` with `nodes[0].instructions`
+- “Create an agent for this website from scratch” → `create_agent_from_template` (preferred default)
 - “Export all conversations for agent … as CSV” → `export_all_conversations`
 - “Add a URL source to the KB for agent …” → `create_kb_doc` with `sourceType: url`
-- “Create a crawler job for workspace … that crawls this site and pushes results to my agent” → `create_crawler_job`
-- “Show me the pages scraped for crawler job …” → `list_crawler_job_pages`
+- “Scrape this URL for workspace … and return the result” → `scrape_url`
 
 Exact tool choice and arguments are up to the host model; the **tool descriptions** in `src/index.ts` are what the model sees.
 
