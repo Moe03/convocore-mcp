@@ -1020,22 +1020,8 @@ function buildPromptFromScrape(args: {
 
 function buildTemplateNodes(template: AgentTemplateName, startInstructions: string): Array<Record<string, unknown>> {
   const startNode = {
-    id: '__start__',
     name: 'Start',
-    type: 'start',
-    isGlobal: false,
     instructions: startInstructions,
-    llmConfig: {
-      modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
-      temperature: 0.7,
-      maxTokens: 2024,
-    },
-    toolUseBias: 0.5,
-    autoRerouter: { enabled: false, level: 1 },
-    kb: { enabled: true, maxChunks: 3 },
-    toolsIds: [],
-    childrenNodes: [],
-    depth: 0,
   };
 
   if (template === 'customer_support') {
@@ -1043,21 +1029,11 @@ function buildTemplateNodes(template: AgentTemplateName, startInstructions: stri
       startNode,
       {
         name: 'Pricing Expert',
-        description: 'Route here for pricing questions',
         instructions: 'Answer pricing questions clearly using KB data only.',
-        isGlobal: true,
-        type: 'default',
-        kb: { enabled: true, tags: ['pricing'] },
-        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
       },
       {
         name: 'Features Expert',
-        description: 'Route here for feature questions',
         instructions: 'Answer feature questions clearly using KB data only.',
-        isGlobal: true,
-        type: 'default',
-        kb: { enabled: true, tags: ['features'] },
-        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
       },
     ];
   }
@@ -1067,12 +1043,7 @@ function buildTemplateNodes(template: AgentTemplateName, startInstructions: stri
       startNode,
       {
         name: 'Units Expert',
-        description: 'Route here for unit/property inventory questions',
         instructions: 'Use KB data to explain available units and help qualify user intent.',
-        isGlobal: true,
-        type: 'default',
-        kb: { enabled: true, tags: ['units'] },
-        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
       },
     ];
   }
@@ -1082,11 +1053,7 @@ function buildTemplateNodes(template: AgentTemplateName, startInstructions: stri
       startNode,
       {
         name: 'Appointment Scheduler',
-        description: 'Route here for booking and rescheduling requests',
         instructions: 'Collect booking details, confirm back to the user, and remain professional.',
-        isGlobal: true,
-        type: 'default',
-        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
       },
     ];
   }
@@ -1096,11 +1063,7 @@ function buildTemplateNodes(template: AgentTemplateName, startInstructions: stri
       startNode,
       {
         name: 'Game Win Node',
-        description: 'Route here when the player wins',
         instructions: 'Congratulate the user for winning and invite them to restart to play again.',
-        isGlobal: true,
-        type: 'default',
-        llmConfig: { modelId: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS, temperature: 0.5, maxTokens: 2024 },
       },
     ];
   }
@@ -1141,24 +1104,19 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       title: title ?? `${domainLabel} Assistant`,
       description:
         description ?? `AI assistant for ${domainLabel}, grounded in ${url}.`,
-      agentPlatform: 'vg',
       theme,
-      lang: language,
       enableNodes: true,
       vg_enableUIEngine: true,
-      vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
-      vg_temperature: 0.5,
-      vg_maxTokens: 1024,
+      voiceConfig: DEFAULT_TEMPLATE_VOICE_CONFIG,
+      vg_instructions: startPrompt,
+      nodes,
+      // Keep common cosmetic fields only; avoid sending unsupported advanced
+      // fields to the strict create endpoint.
+      lang: language,
       proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
-      recordChatHistory: true,
       roundedImageURL,
       chatBgURL,
       branding,
-      voiceConfig: DEFAULT_TEMPLATE_VOICE_CONFIG,
-      nodesSettings: {
-        geminiLiveOptions: DEFAULT_GEMINI_LIVE_OPTIONS,
-      },
-      nodes,
       ...(additionalConfig || {}),
     },
   };
@@ -1168,13 +1126,20 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   let kbImportResult: any = null;
 
   if (createKbUrlDoc && createdAgentId) {
-    kbImportResult = await client.createKBDoc(createdAgentId, {
-      name: `${domainLabel} Website`,
-      sourceType: 'url',
-      urls: [url],
-      scrapeContent: true,
-      refreshRate: 'never',
-    });
+    try {
+      kbImportResult = await client.createKBDoc(createdAgentId, {
+        name: `${domainLabel} Website`,
+        sourceType: 'url',
+        urls: [url],
+        scrapeContent: true,
+        refreshRate: 'never',
+      });
+    } catch (error) {
+      kbImportResult = {
+        success: false,
+        message: error instanceof Error ? error.message : 'KB import failed',
+      };
+    }
   }
 
   return {
