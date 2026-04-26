@@ -117,7 +117,7 @@ const CreateAgentSchema = z.object({
 });
 
 const CreateAgentFromTemplateSchema = z.object({
-  workspaceId: z.string().describe('Workspace ID used for the scrape step'),
+  workspaceId: z.string().optional().describe('Optional workspace ID override. If omitted, MCP tries to auto-detect it from your accessible agents.'),
   url: z.string().url().describe('Website URL to scrape before generating the agent prompt'),
   template: z.enum(AgentTemplateValues).optional().default('customer_support').describe('Backbone template to use'),
   title: z.string().optional().describe('Optional agent title override'),
@@ -954,6 +954,37 @@ function toDomainLabel(url: string): string {
   }
 }
 
+function extractAgentsFromListResult(listResult: any): any[] {
+  if (Array.isArray(listResult)) return listResult;
+  if (Array.isArray(listResult?.data)) return listResult.data;
+  if (Array.isArray(listResult?.agents)) return listResult.agents;
+  if (Array.isArray(listResult?.data?.agents)) return listResult.data.agents;
+  return [];
+}
+
+async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string> {
+  if (explicitWorkspaceId && explicitWorkspaceId.trim().length > 0) {
+    return explicitWorkspaceId;
+  }
+
+  const listResult = await client.listAgents();
+  const agents = extractAgentsFromListResult(listResult);
+  const ownerCandidate = agents.find(
+    (agent: any) =>
+      (typeof agent?.ownerID === 'string' && agent.ownerID.trim().length > 0) ||
+      (typeof agent?.ownerId === 'string' && agent.ownerId.trim().length > 0)
+  );
+
+  const workspaceId = ownerCandidate?.ownerID || ownerCandidate?.ownerId;
+  if (typeof workspaceId === 'string' && workspaceId.trim().length > 0) {
+    return workspaceId;
+  }
+
+  throw new Error(
+    'Could not auto-detect workspaceId from accessible agents. Pass workspaceId explicitly to create_agent_from_template.'
+  );
+}
+
 function extractScrapedText(scrapeResult: any): string {
   const page = scrapeResult?.data?.page;
   const candidates: unknown[] = [
@@ -1088,7 +1119,8 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     additionalConfig,
   } = args;
 
-  const scrapeResult = await client.scrapeUrl(workspaceId, url);
+  const resolvedWorkspaceId = await resolveWorkspaceId(workspaceId);
+  const scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, url);
   const domainLabel = toDomainLabel(url);
   const scrapedText = extractScrapedText(scrapeResult);
   const startPrompt = buildPromptFromScrape({
@@ -1147,6 +1179,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     message: 'Template-based agent created from scraped website context.',
     data: {
       agent: (result as any)?.data ?? result,
+      workspaceId: resolvedWorkspaceId,
       templateUsed: template,
       startPrompt,
       scrape: {
@@ -1231,13 +1264,13 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PREFERRED way to create new agents from scratch. Always starts by scraping the provided website URL so the agent understands what the site is about before creation. Then it synthesizes a start prompt and creates a VG agent from a hardcoded backbone template with branding/title overrides.',
+      'PREFERRED way to create new agents from scratch. Always starts by scraping the provided website URL so the agent understands what the site is about before creation. If workspaceId is omitted, MCP auto-detects it from your accessible agents. Then it synthesizes a start prompt and creates a VG agent from a hardcoded backbone template with branding/title overrides.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description: 'Workspace ID used for the scrape step',
+          description: 'Optional workspace ID override. If omitted, MCP auto-detects it from accessible agents.',
         },
         url: {
           type: 'string',
@@ -1292,7 +1325,7 @@ const tools: Tool[] = [
           description: 'Optional extra agent fields merged into the final payload',
         },
       },
-      required: ['workspaceId', 'url'],
+      required: ['url'],
     },
   },
   {

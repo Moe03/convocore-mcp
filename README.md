@@ -280,9 +280,10 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Agent tools
 
-**`create_agent_from_template`** — **Preferred for almost all from-scratch agent creation.** Required: `workspaceId`, `url`. Optional: `template`, `title`, `description`, `theme`, `language`, `roundedImageURL`, `chatBgURL`, `branding`, `proactiveMessage`, `createKbUrlDoc`, `additionalConfig`.
+**`create_agent_from_template`** — **Preferred for almost all from-scratch agent creation.** Required: `url`. Optional: `workspaceId`, `template`, `title`, `description`, `theme`, `language`, `roundedImageURL`, `chatBgURL`, `branding`, `proactiveMessage`, `createKbUrlDoc`, `additionalConfig`.
 
 - Runs pipeline: **scrape URL -> generate start prompt -> create agent from template backbone**.
+- `workspaceId` is optional here. If omitted, MCP auto-detects it from your accessible agents.
 - The scrape step happens first so the assistant understands what the website is about before creating the agent.
 - Forces `agentPlatform` to **`vg`**.
 - `template` is one of: `blank`, `customer_support`, `real_estate`, `healthcare_secretary`, `game_npc` (default `customer_support`).
