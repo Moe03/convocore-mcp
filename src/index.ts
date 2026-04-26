@@ -162,7 +162,7 @@ const ListAgentsSchema = z.object({
 });
 
 const SearchAgentsSchema = z.object({
-  workspaceId: z.string().describe('Your workspace/org ID from ConvoCore dashboard'),
+  workspaceId: z.string().optional().describe('Optional workspace/org ID override. If omitted, MCP auto-detects it from your accessible agents'),
   search: z.string().optional().describe('Search query to find agents'),
   page: z.number().optional().default(1).describe('Page number'),
   limit: z.number().optional().default(50).describe('Results per page'),
@@ -410,7 +410,7 @@ const GetKBStatsSchema = z.object({
 // ==================== SCRAPE SCHEMAS ====================
 
 const ScrapeUrlSchema = z.object({
-  workspaceId: z.string().describe('The workspace that owns the scrape job'),
+  workspaceId: z.string().optional().describe('Optional workspace ID override. If omitted, MCP auto-detects it from your accessible agents.'),
   url: z.string().url().describe('The single URL to scrape'),
 });
 
@@ -981,7 +981,7 @@ async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string>
   }
 
   throw new Error(
-    'Could not auto-detect workspaceId from accessible agents. Pass workspaceId explicitly to create_agent_from_template.'
+    'Could not auto-detect workspaceId from accessible agents. Pass workspaceId explicitly.'
   );
 }
 
@@ -1440,14 +1440,13 @@ const tools: Tool[] = [
   {
     name: 'search_agents',
     description:
-      'Search/filter ConvoCore agents. Prefer this for most automation. workspaceId is the same value as agent.ownerID (ownerID is read-only on the agent document). Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
+      'Search/filter ConvoCore agents. Prefer this for most automation. If workspaceId is omitted, MCP auto-detects it from accessible agents. workspaceId is the same value as agent.ownerID (ownerID is read-only on the agent document). Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description:
-            'Workspace/org ID. This is the same value as agent.ownerID on returned agents; ownerID is read-only and must not be patched.',
+          description: 'Optional workspace/org ID override. If omitted, MCP auto-detects it from accessible agents.',
         },
         search: {
           type: 'string',
@@ -1470,7 +1469,7 @@ const tools: Tool[] = [
           description: 'Show only starred agents (default: false)',
         },
       },
-      required: ['workspaceId'],
+      required: [],
     },
   },
   {
@@ -2015,13 +2014,13 @@ const tools: Tool[] = [
   // ==================== SCRAPE TOOL ====================
   {
     name: 'scrape_url',
-    description: 'Scrape exactly one URL for a workspace and wait for the scrape result before returning. This tool does not follow discovered links and does not expose job options.',
+    description: 'Scrape exactly one URL and wait for the scrape result before returning. If workspaceId is omitted, MCP auto-detects it from accessible agents. This tool does not follow discovered links and does not expose job options.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description: 'The workspace that owns the scrape job',
+          description: 'Optional workspace ID override. If omitted, MCP auto-detects it from accessible agents.',
         },
         url: {
           type: 'string',
@@ -2029,7 +2028,7 @@ const tools: Tool[] = [
           description: 'The single URL to scrape',
         },
       },
-      required: ['workspaceId', 'url'],
+      required: ['url'],
     },
   },
   // ==================== WIDGET CSS TOOLS ====================
@@ -2856,8 +2855,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_agents': {
         const validated = SearchAgentsSchema.parse(args);
+        const resolvedWorkspaceId = await resolveWorkspaceId(validated.workspaceId);
         const result = await client.searchAgents(
-          validated.workspaceId,
+          resolvedWorkspaceId,
           validated.search,
           validated.page,
           validated.limit,
@@ -3159,7 +3159,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'scrape_url': {
         const validated = ScrapeUrlSchema.parse(args);
-        const result = await client.scrapeUrl(validated.workspaceId, validated.url);
+        const resolvedWorkspaceId = await resolveWorkspaceId(validated.workspaceId);
+        const result = await client.scrapeUrl(resolvedWorkspaceId, validated.url);
         return {
           content: [
             {

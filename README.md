@@ -303,7 +303,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`list_agents`** — No parameters.
 
-**`search_agents`** — Required: `workspaceId` (org/workspace ID from the ConvoCore dashboard). Optional: `search`, `page` (default 1), `limit` (default 50), `sortBy` (`newest` | `oldest` | `alphabetical`, default `newest`), `starredOnly` (default false).
+**`search_agents`** — Required: none. Optional: `workspaceId` (workspace/org override), `search`, `page` (default 1), `limit` (default 50), `sortBy` (`newest` | `oldest` | `alphabetical`, default `newest`), `starredOnly` (default false). If `workspaceId` is omitted, MCP auto-detects it from accessible agents.
 
 **`export_agent`** — Required: `agentId`. Returns template JSON for backup/migration.
 
@@ -353,7 +353,7 @@ Optional: `metadata`, `tags`, `refreshRate` — `6h` | `12h` | `24h` | `7d` | `n
 
 ### Scrape tool
 
-**`scrape_url`** — Required: `workspaceId`, `url`. Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
+**`scrape_url`** — Required: `url`. Optional: `workspaceId` (workspace override). If omitted, MCP auto-detects it from accessible agents. Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
 
 ### Interact (WebSocket) tool
 
