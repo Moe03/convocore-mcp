@@ -252,7 +252,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `update_agent` | PATCH | `/agents/{agentId}` body `{ agent: { … } }` |
 | `delete_agent` | DELETE | `/agents/{agentId}` |
 | `list_agents` | GET | `/agents` |
-| `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` |
+| `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` (`workspaceId` optional; auto-detected when omitted) |
 | `export_agent` | GET | `/agents/{agentId}/export-template` |
 | `import_agent` | POST | `/agents/import-template` |
 | `get_agent_usage` | POST | `/agents/{agentId}/usage` body `{ range }` |
