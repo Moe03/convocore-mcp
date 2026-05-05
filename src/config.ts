@@ -9,6 +9,7 @@ export function getConfig(): ConvoCoreConfig {
   const apiRegion = (process.env.CONVOCORE_API_REGION || 'eu-gcp') as 'eu-gcp' | 'na-gcp';
   const baseUrlOverride = process.env.CONVOCORE_API_BASE_URL;
   const interactWsUrlOverride = process.env.CONVOCORE_INTERACT_WS_URL;
+  const workspaceId = process.env.CONVOCORE_WORKSPACE_ID?.trim() || undefined;
 
   if (!workspaceSecret) {
     throw new Error('WORKSPACE_SECRET environment variable is required');
@@ -25,6 +26,7 @@ export function getConfig(): ConvoCoreConfig {
     apiRegion,
     baseUrl,
     interactWsUrl: interactWsUrlOverride || undefined,
+    workspaceId,
   };
 }
 

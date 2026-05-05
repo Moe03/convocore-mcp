@@ -23,6 +23,7 @@ import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js'
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
+import { handleAutoGenPallet } from './agent-theme-palette.js';
 
 const execAsync = promisify(exec);
 
@@ -98,8 +99,6 @@ const AgentVoiceConfigSchema = z
   })
   .passthrough();
 
-const AgentTemplateValues = ['blank', 'customer_support', 'real_estate', 'healthcare_secretary', 'game_npc'] as const;
-
 const CreateAgentSchema = z.object({
   title: z.string().describe('The title of the agent'),
   description: z.string().optional().describe('A brief description of the agent'),
@@ -116,21 +115,77 @@ const CreateAgentSchema = z.object({
   additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; not a primary API concept'),
 });
 
-const CreateAgentFromTemplateSchema = z.object({
-  workspaceId: z.string().optional().describe('Optional workspace ID override. If omitted, MCP tries to auto-detect it from your accessible agents.'),
-  url: z.string().url().describe('Website URL to scrape before generating the agent prompt'),
-  template: z.enum(AgentTemplateValues).optional().default('customer_support').describe('Backbone template to use'),
-  title: z.string().optional().describe('Optional agent title override'),
-  description: z.string().optional().describe('Optional agent description override'),
-  theme: z.string().optional().default('blue-light').describe('Visual theme'),
-  language: z.string().optional().default('en').describe('Primary language for the agent'),
-  roundedImageURL: z.string().url().optional().describe('Optional avatar/logo URL'),
-  chatBgURL: z.string().url().optional().describe('Optional chat background image URL'),
-  branding: z.string().optional().describe('Optional branding label'),
-  proactiveMessage: z.string().optional().describe('Optional proactive greeting bubble text'),
-  createKbUrlDoc: z.boolean().optional().default(true).describe('If true, add the URL as a KB document after creating the agent'),
-  additionalConfig: z.record(z.any()).optional().describe('Optional extra agent fields to merge in last'),
-});
+const HexColorSchema = z
+  .string()
+  .trim()
+  .transform((s) => (s.startsWith('#') ? s : `#${s}`))
+  .refine(
+    (s) => /^#[0-9A-Fa-f]{3}$|^#[0-9A-Fa-f]{6}$/.test(s),
+    'primaryColor must be 3- or 6-digit hex, e.g. #226D7A'
+  );
+
+const CreateAgentFromTemplateSchema = z
+  .object({
+    workspaceId: z.string().optional().describe('Optional workspace/org ID. Prefer setting env CONVOCORE_WORKSPACE_ID to avoid auto-detection calls.'),
+    title: z.string().min(1).describe('Agent display title'),
+    description: z.string().optional().describe('Short description'),
+    systemPrompt: z
+      .string()
+      .min(1)
+      .describe('Canonical chat / text system instructions. Also used as nodes[0].instructions when enableNodes=true.'),
+    voicePrompt: z
+      .string()
+      .optional()
+      .describe(
+        'Optional realtime (Gemini Live) system instruction. If omitted, systemPrompt applies to voice too.'
+      ),
+    voiceConfig: AgentVoiceConfigSchema.describe(
+      'Complete voice configuration (transcriber + speechGen + config). speechGen.provider MUST be `google-live` or `ultravox`. Use search_voices against those providers only to pick voiceId (accent, gender, etc.).'
+    ),
+    primaryColor: HexColorSchema.describe(
+      'Brand hex from the site (pick one prominent color from scrape_url colour list). Drives customThemeJSONString / nineColorPallet.'
+    ),
+    themeType: z.enum(['light', 'dark']).optional().default('light').describe('Widget theme; defaults to light unless user asked for dark.'),
+    image: z
+      .string()
+      .url()
+      .describe('Logo / rounded avatar URL — use scrape_url favicon or brand image when possible.'),
+    language: z.string().optional().default('en'),
+    proactiveMessage: z.string().optional(),
+    sourceUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        'Optional URL for KB attachment (and optional scrape). For colours/favicon, call scrape_url first yourself; this field is not required to create the agent.'
+      ),
+    createKbUrlDoc: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe('When true with sourceUrl, registers a URL KB doc after create (non-fatal on failure).'),
+    branding: z.string().optional(),
+    chatBgURL: z.string().url().optional(),
+    additionalConfig: z.record(z.any()).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const p = data.voiceConfig?.speechGen?.provider;
+    if (p !== 'google-live' && p !== 'ultravox') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['voiceConfig', 'speechGen', 'provider'],
+        message:
+          'speechGen.provider must be "google-live" (Gemini Live) or "ultravox" for template chat+voice agents.',
+      });
+    }
+    if (data.createKbUrlDoc && !data.sourceUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sourceUrl'],
+        message: 'createKbUrlDoc requires sourceUrl.',
+      });
+    }
+  });
 
 const GetAgentSchema = z.object({
   agentId: z.string().describe('The unique identifier of the agent'),
@@ -158,7 +213,13 @@ const DeleteAgentSchema = z.object({
 });
 
 const ListAgentsSchema = z.object({
-  // No parameters needed - just lists all agents!
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(500)
+    .optional()
+    .describe('When the API supports it, fetch at most this many agents. Omit for full list (can be very large).'),
 });
 
 const SearchAgentsSchema = z.object({
@@ -940,8 +1001,6 @@ const DEFAULT_TEMPLATE_VOICE_CONFIG = {
   },
 } as const;
 
-type AgentTemplateName = (typeof AgentTemplateValues)[number];
-
 function toDomainLabel(url: string): string {
   try {
     const hostname = new URL(url).hostname.replace(/^www\./i, '');
@@ -954,6 +1013,33 @@ function toDomainLabel(url: string): string {
   }
 }
 
+function isPlainRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+/** Deep-merge plain objects; arrays and non-objects replace wholesale. */
+function mergeDeep<T extends Record<string, unknown>>(base: T, override?: Record<string, unknown>): T {
+  if (!override || !isPlainRecord(override)) return base;
+  const out: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(override)) {
+    const oVal = override[key];
+    if (oVal === undefined) continue;
+    const bVal = out[key];
+    if (Array.isArray(oVal)) {
+      out[key] = oVal;
+      continue;
+    }
+    if (isPlainRecord(bVal) && isPlainRecord(oVal)) {
+      out[key] = mergeDeep(bVal as Record<string, unknown>, oVal as Record<string, unknown>);
+    } else {
+      out[key] = oVal;
+    }
+  }
+  return out as T;
+}
+
+let autoResolvedWorkspaceCache: string | null = null;
+
 function extractAgentsFromListResult(listResult: any): any[] {
   if (Array.isArray(listResult)) return listResult;
   if (Array.isArray(listResult?.data)) return listResult.data;
@@ -964,10 +1050,18 @@ function extractAgentsFromListResult(listResult: any): any[] {
 
 async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string> {
   if (explicitWorkspaceId && explicitWorkspaceId.trim().length > 0) {
-    return explicitWorkspaceId;
+    return explicitWorkspaceId.trim();
   }
 
-  const listResult = await client.listAgents();
+  if (config.workspaceId && config.workspaceId.trim().length > 0) {
+    return config.workspaceId.trim();
+  }
+
+  if (autoResolvedWorkspaceCache) {
+    return autoResolvedWorkspaceCache;
+  }
+
+  const listResult = await client.listAgents({ limit: 1 });
   const agents = extractAgentsFromListResult(listResult);
   const ownerCandidate = agents.find(
     (agent: any) =>
@@ -977,11 +1071,12 @@ async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string>
 
   const workspaceId = ownerCandidate?.ownerID || ownerCandidate?.ownerId;
   if (typeof workspaceId === 'string' && workspaceId.trim().length > 0) {
-    return workspaceId;
+    autoResolvedWorkspaceCache = workspaceId.trim();
+    return autoResolvedWorkspaceCache;
   }
 
   throw new Error(
-    'Could not auto-detect workspaceId from accessible agents. Pass workspaceId explicitly.'
+    'Could not auto-detect workspaceId. Set env CONVOCORE_WORKSPACE_ID or pass workspaceId explicitly.'
   );
 }
 
@@ -1015,154 +1110,128 @@ function extractScrapedText(scrapeResult: any): string {
   return normalized.slice(0, 6000);
 }
 
-function buildPromptFromScrape(args: {
-  url: string;
-  domainLabel: string;
-  template: AgentTemplateName;
-  scrapedText: string;
-}): string {
-  const base = [
-    `You are the official ${args.domainLabel} support assistant.`,
-    `Ground your answers in information from ${args.url}.`,
-    'Never invent company policies, pricing, or technical details.',
-    'If information is missing, say that clearly and offer to escalate to a human.',
-    'Keep answers concise, clear, and helpful.',
-    'DO NOT output images unless the user explicitly asks for an image.',
-  ];
-
-  if (args.template === 'real_estate') {
-    base.push('When users ask about properties, ask clarifying questions about budget, location, and timeline.');
-  } else if (args.template === 'healthcare_secretary') {
-    base.push('Be empathetic and professional. Do not provide medical diagnosis; focus on admin and booking support.');
-  } else if (args.template === 'game_npc') {
-    base.push('Keep a playful tone while still staying safe and polite.');
-  } else if (args.template === 'customer_support') {
-    base.push('Prioritize troubleshooting steps, account help, and product plan guidance.');
+function buildCustomThemeJSONString(primary: string, themeType: 'light' | 'dark'): string {
+  const nine = handleAutoGenPallet(primary, themeType);
+  if (!nine?.length) {
+    throw new Error('Failed to build nineColorPallet from primaryColor');
   }
-
-  if (args.scrapedText.length > 0) {
-    base.push('');
-    base.push('Website context excerpt (sanitized):');
-    base.push(args.scrapedText.slice(0, 2800));
-  }
-
-  return base.join('\n');
+  return JSON.stringify({ themeType, primary, nineColorPallet: nine });
 }
 
-function buildTemplateNodes(template: AgentTemplateName, startInstructions: string): Array<Record<string, unknown>> {
-  const startNode = {
-    name: 'Start',
-    instructions: startInstructions,
-  };
-
-  if (template === 'customer_support') {
-    return [
-      startNode,
-      {
-        name: 'Pricing Expert',
-        instructions: 'Answer pricing questions clearly using KB data only.',
-      },
-      {
-        name: 'Features Expert',
-        instructions: 'Answer feature questions clearly using KB data only.',
-      },
-    ];
-  }
-
-  if (template === 'real_estate') {
-    return [
-      startNode,
-      {
-        name: 'Units Expert',
-        instructions: 'Use KB data to explain available units and help qualify user intent.',
-      },
-    ];
-  }
-
-  if (template === 'healthcare_secretary') {
-    return [
-      startNode,
-      {
-        name: 'Appointment Scheduler',
-        instructions: 'Collect booking details, confirm back to the user, and remain professional.',
-      },
-    ];
-  }
-
-  if (template === 'game_npc') {
-    return [
-      startNode,
-      {
-        name: 'Game Win Node',
-        instructions: 'Congratulate the user for winning and invite them to restart to play again.',
-      },
-    ];
-  }
-
-  return [startNode];
+function buildGeminiNodesSettings(systemPrompt: string, voicePrompt?: string) {
+  const text = (voicePrompt != null && voicePrompt.trim().length > 0 ? voicePrompt : systemPrompt).trim();
+  const base = JSON.parse(JSON.stringify(DEFAULT_GEMINI_LIVE_OPTIONS)) as Record<string, unknown>;
+  const session = (base.sessionConfig as Record<string, unknown>) || {};
+  const mergedSession = mergeDeep(session, {
+    systemInstruction: { parts: [{ text }] },
+  });
+  const merged = mergeDeep(base, { sessionConfig: mergedSession });
+  return { geminiLiveOptions: merged };
 }
 
 async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
   const {
     workspaceId,
-    url,
-    template,
     title,
     description,
-    theme,
+    systemPrompt,
+    voicePrompt,
+    voiceConfig,
+    primaryColor,
+    themeType,
+    image,
     language,
-    roundedImageURL,
     chatBgURL,
     branding,
     proactiveMessage,
+    sourceUrl,
     createKbUrlDoc,
     additionalConfig,
   } = args;
 
   const resolvedWorkspaceId = await resolveWorkspaceId(workspaceId);
-  const scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, url);
-  const domainLabel = toDomainLabel(url);
-  const scrapedText = extractScrapedText(scrapeResult);
-  const startPrompt = buildPromptFromScrape({
-    url,
-    domainLabel,
-    template,
-    scrapedText,
-  });
-  const nodes = buildTemplateNodes(template, startPrompt);
 
-  const payload = {
-    agent: {
-      title: title ?? `${domainLabel} Assistant`,
-      description:
-        description ?? `AI assistant for ${domainLabel}, grounded in ${url}.`,
-      theme,
-      enableNodes: true,
-      vg_enableUIEngine: true,
-      voiceConfig: DEFAULT_TEMPLATE_VOICE_CONFIG,
-      vg_instructions: startPrompt,
-      nodes,
-      // Keep common cosmetic fields only; avoid sending unsupported advanced
-      // fields to the strict create endpoint.
-      lang: language,
-      proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
-      roundedImageURL,
-      chatBgURL,
-      branding,
-      ...(additionalConfig || {}),
-    },
+  let scrapeMeta: {
+    success: boolean;
+    timedOut: boolean;
+    url: string;
+    excerpt: string;
+  } | null = null;
+
+  if (sourceUrl) {
+    const scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, sourceUrl);
+    const scrapedText = extractScrapedText(scrapeResult);
+    scrapeMeta = {
+      success: !!(scrapeResult as any)?.success,
+      timedOut: !!(scrapeResult as any)?.data?.timedOut,
+      url: sourceUrl,
+      excerpt: scrapedText.slice(0, 1200),
+    };
+  }
+
+  const templateVoiceBase = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE_VOICE_CONFIG)) as Record<string, unknown>;
+  const resolvedVoice = mergeDeep(templateVoiceBase, voiceConfig as Record<string, unknown>);
+
+  const { nodesSettings: nodesFromAdditional, ...additionalRest } = additionalConfig || {};
+  const extraNs = (nodesFromAdditional ?? {}) as Record<string, unknown>;
+
+  let nodesSettings: Record<string, unknown> | undefined;
+
+  if (resolvedVoice.speechGen && (resolvedVoice.speechGen as { provider?: string }).provider === 'google-live') {
+    const built = buildGeminiNodesSettings(systemPrompt, voicePrompt);
+    nodesSettings = {
+      ...extraNs,
+      geminiLiveOptions: mergeDeep(
+        built.geminiLiveOptions as Record<string, unknown>,
+        (extraNs.geminiLiveOptions as Record<string, unknown>) || {}
+      ),
+    };
+  } else if (Object.keys(extraNs).length > 0) {
+    nodesSettings = extraNs;
+  }
+
+  const agentCore: Record<string, unknown> = {
+    title,
+    description: description ?? '',
+    theme: themeType === 'dark' ? 'custom-blue-dark' : 'custom-blue-light',
+    enableNodes: true,
+    vg_enableUIEngine: true,
+    vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+    vg_systemPrompt: systemPrompt,
+    vg_instructions: systemPrompt,
+    voiceConfig: resolvedVoice,
+    nodes: [{ name: 'Start', instructions: systemPrompt }],
+    lang: language,
+    proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
+    roundedImageURL: image,
+    customThemeJSONString: buildCustomThemeJSONString(primaryColor, themeType),
+    chatBgURL,
+    branding,
   };
 
-  const result = await client.createAgent(payload);
-  const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
-  let kbImportResult: any = null;
+  if (nodesSettings) {
+    agentCore.nodesSettings = nodesSettings;
+  }
 
-  if (createKbUrlDoc && createdAgentId) {
+  const payload = { agent: mergeDeep(agentCore, additionalRest as Record<string, unknown>) };
+
+  const result = await client.createAgent(payload as any);
+  const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
+
+  let fullAgent: any = null;
+  if (createdAgentId) {
+    const got = await client.getAgent(createdAgentId);
+    fullAgent = (got as any)?.data ?? got;
+  }
+
+  let kbImportResult: any = null;
+  if (createKbUrlDoc && createdAgentId && sourceUrl) {
+    const domainLabel = toDomainLabel(sourceUrl);
     try {
       kbImportResult = await client.createKBDoc(createdAgentId, {
         name: `${domainLabel} Website`,
         sourceType: 'url',
-        urls: [url],
+        urls: [sourceUrl],
         scrapeContent: true,
         refreshRate: 'never',
       });
@@ -1176,18 +1245,16 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
 
   return {
     success: (result as any)?.success ?? true,
-    message: 'Template-based agent created from scraped website context.',
+    message:
+      'Agent created from template fields. `agent` is the full document from get_agent after create (use data.agent.ID or data.agent.id).',
     data: {
-      agent: (result as any)?.data ?? result,
       workspaceId: resolvedWorkspaceId,
-      templateUsed: template,
-      startPrompt,
-      scrape: {
-        success: scrapeResult.success,
-        timedOut: !!scrapeResult.data?.timedOut,
-        url,
-        excerpt: scrapedText.slice(0, 1200),
-      },
+      agentId: createdAgentId ?? null,
+      agent: fullAgent ?? (result as any)?.data ?? result,
+      createResponse: result,
+      primaryColor,
+      themeType,
+      scrape: scrapeMeta,
       kbImport: kbImportResult,
     },
   };
@@ -1198,7 +1265,7 @@ const tools: Tool[] = [
   {
     name: 'create_agent',
     description:
-      'Create a new ConvoCore AI agent directly from supplied fields (legacy/raw mode). IMPORTANT: for new agents from scratch, first learn the website via scrape and use create_agent_from_template instead. Use this tool only for manual/advanced direct payload control.',
+      'Create a new ConvoCore AI agent directly from supplied fields (legacy/raw mode). For new branded chat+voice agents, use scrape_url + create_agent_from_template with explicit prompts and voiceConfig. Use this tool only for manual/advanced direct payload control.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1264,68 +1331,63 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PREFERRED way to create new agents from scratch. Always starts by scraping the provided website URL so the agent understands what the site is about before creation. If workspaceId is omitted, MCP auto-detects it from your accessible agents. Then it synthesizes a start prompt and creates a VG agent from a hardcoded backbone template with branding/title overrides.',
+      'PRIMARY way to create chat+voice agents. Workflow: (1) Call scrape_url on the brand site — use returned favicon/ image URL as `image` and choose `primaryColor` hex from returned site colours / branding. (2) Compose `systemPrompt` (text chat behaviour) and optionally `voicePrompt` (Gemini Live / voice persona addendum — omit to reuse systemPrompt). (3) Set `speechGen.provider` to `google-live` OR `ultravox` only — use search_voices + list_models_voices on those providers to pick IDs for accents (e.g. Australian). (4) Pass the full merged `voiceConfig` (deepgram/transcriber + speechGen + config). MCP builds `customThemeJSONString` (nineColorPallet via handleAutoGenPallet equivalent), merges defaults, attaches Gemini Live nodesSettings when provider is google-live, creates the agent, then re-loads via get_agent so the response contains the FULL agent record (ID + all fields). Optional `sourceUrl` triggers a scrape wait + optional KB doc when createKbUrlDoc=true. Set env CONVOCORE_WORKSPACE_ID (or pass workspaceId) to skip slow workspace auto-detection.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: {
           type: 'string',
-          description: 'Optional workspace ID override. If omitted, MCP auto-detects it from accessible agents.',
+          description: 'Optional workspace/org ID. Prefer CONVOCORE_WORKSPACE_ID in env for faster startup.',
         },
-        url: {
+        title: { type: 'string', description: 'Agent title' },
+        description: { type: 'string', description: 'Short description' },
+        systemPrompt: {
+          type: 'string',
+          description: 'Main chat / node instructions (nodes[0] + vg_systemPrompt + vg_instructions).',
+        },
+        voicePrompt: {
+          type: 'string',
+          description:
+            'Optional Gemini Live systemInstruction text. If omitted, systemPrompt is used for voice as well.',
+        },
+        voiceConfig: {
+          ...AgentVoiceConfigInputSchema,
+          description:
+            'Full voice configuration. speechGen.provider MUST be `google-live` or `ultravox`. Use search_voices on those providers only.',
+        },
+        primaryColor: {
+          type: 'string',
+          description: 'Hex brand colour, e.g. #226D7A (from scrape_url colour list).',
+        },
+        themeType: {
+          type: 'string',
+          enum: ['light', 'dark'],
+          description: 'Widget theme (default light unless user wants dark)',
+        },
+        image: {
           type: 'string',
           format: 'uri',
-          description: 'Website URL to scrape before creating the agent',
+          description: 'Logo / rounded avatar URL (favicon from scrape_url is ideal).',
         },
-        template: {
-          type: 'string',
-          enum: [...AgentTemplateValues],
-          description: 'Backbone template key. Default: customer_support',
-        },
-        title: {
-          type: 'string',
-          description: 'Optional agent title override',
-        },
-        description: {
-          type: 'string',
-          description: 'Optional agent description override',
-        },
-        theme: {
-          type: 'string',
-          description: 'Visual theme (default: blue-light)',
-        },
-        language: {
-          type: 'string',
-          description: 'Primary language for the agent (default: en)',
-        },
-        roundedImageURL: {
+        language: { type: 'string', description: 'BCP language (default en)' },
+        proactiveMessage: { type: 'string', description: 'Widget greeting bubble' },
+        sourceUrl: {
           type: 'string',
           format: 'uri',
-          description: 'Optional avatar/logo URL',
-        },
-        chatBgURL: {
-          type: 'string',
-          format: 'uri',
-          description: 'Optional chat background image URL',
-        },
-        branding: {
-          type: 'string',
-          description: 'Optional branding label',
-        },
-        proactiveMessage: {
-          type: 'string',
-          description: 'Optional proactive greeting bubble text',
+          description: 'Optional — MCP waits for scrape (for KB / context). Not required to create the agent.',
         },
         createKbUrlDoc: {
           type: 'boolean',
-          description: 'If true, add the source URL into KB after agent creation',
+          description: 'If true with sourceUrl, attach URL KB after create (errors are non-fatal).',
         },
+        branding: { type: 'string' },
+        chatBgURL: { type: 'string', format: 'uri' },
         additionalConfig: {
           type: 'object',
-          description: 'Optional extra agent fields merged into the final payload',
+          description: 'Merged last into agent root. nodesSettings.geminiLiveOptions deep-merges with MCP defaults for google-live.',
         },
       },
-      required: ['url'],
+      required: ['title', 'systemPrompt', 'voiceConfig', 'primaryColor', 'image'],
     },
   },
   {
@@ -1430,10 +1492,16 @@ const tools: Tool[] = [
   {
     name: 'list_agents',
     description:
-      'List latest/all accessible ConvoCore agents with no filters. For most agent lookup automation, prefer search_agents because it takes workspaceId (same value as agent.ownerID) and supports search/pagination/sorting.',
+      'List accessible agents. Passing `limit` requests a capped page when the API supports it — strongly recommended vs downloading the entire workspace catalog. Prefer search_agents for filtered lookup. Resolve workspace/org ID once (ownerID / CONVOCORE_WORKSPACE_ID) for other tools.',
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        limit: {
+          type: 'number',
+          description:
+            'When supported, return at most this many agents (recommended: small). Omit only if you intentionally need the full list.',
+        },
+      },
       required: [],
     },
   },
@@ -2841,8 +2909,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_agents': {
-        ListAgentsSchema.parse(args); // No params needed
-        const result = await client.listAgents();
+        const validated = ListAgentsSchema.parse(args);
+        const result = await client.listAgents(
+          validated.limit != null ? { limit: validated.limit } : undefined
+        );
         return {
           content: [
             {

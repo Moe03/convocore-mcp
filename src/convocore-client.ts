@@ -175,10 +175,16 @@ export class ConvoCoreClient {
   }
 
   /**
-   * List all agents - simple GET /agents endpoint
+   * List agents — GET /agents. Pass `limit` to request a smaller first page when
+   * the API supports it (ignored by servers that omit pagination).
    */
-  async listAgents(): Promise<any> {
-    return this.request<any>('/agents');
+  async listAgents(opts?: { limit?: number }): Promise<any> {
+    const lim = opts?.limit;
+    const q =
+      typeof lim === 'number' && lim > 0
+        ? `?limit=${Math.min(Math.floor(lim), 500)}`
+        : '';
+    return this.request<any>(`/agents${q}`);
   }
 
   /**

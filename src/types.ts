@@ -7,6 +7,10 @@ export interface ConvoCoreConfig {
   apiRegion: 'eu-gcp' | 'na-gcp';
   baseUrl: string;
   /**
+   * Workspace / org UUID. When set, MCP skips heavyweight auto-detection calls.
+   */
+  workspaceId?: string;
+  /**
    * Optional explicit override for the /interact WebSocket URL.
    * When unset, the URL is derived from `baseUrl` by swapping the scheme
    * to ws/wss and pointing at /interact on the same host.

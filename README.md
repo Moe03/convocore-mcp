@@ -59,7 +59,8 @@ flowchart LR
 |------|---------|
 | `src/index.ts` | MCP server, tool definitions (JSON Schema for hosts), Zod validation, tool dispatch |
 | `src/convocore-client.ts` | HTTP client: paths, methods, query strings, JSON bodies |
-| `src/config.ts` | `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, resolved `baseUrl` |
+| `src/agent-theme-palette.ts` | `hexToHsl` / `handleAutoGenPallet` — builds `nineColorPallet` for `customThemeJSONString` |
+| `src/config.ts` | `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_WORKSPACE_ID`, resolved `baseUrl` |
 | `src/types.ts` | Shared TypeScript types for config and agent payloads |
 | `dist/` | Compiled output (`pnpm run build` / `tsc`) — what npm publishes |
 | `Dockerfile` | Multi-stage image: build with pnpm, run `node dist/index.js` (alternative distribution) |
@@ -77,8 +78,9 @@ flowchart LR
 | `CONVOCORE_API_REGION` | No | `eu-gcp` | `eu-gcp` or `na-gcp`; selects API host (see below). |
 | `CONVOCORE_API_BASE_URL` | No | — | Optional full REST base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. The `/interact` WebSocket URL is derived from this (scheme swapped to `ws/wss`, path replaced with `/interact`) unless `CONVOCORE_INTERACT_WS_URL` is also set. |
 | `CONVOCORE_INTERACT_WS_URL` | No | — | Optional explicit override for **only** the `/interact` WebSocket URL, e.g. `ws://localhost:5000/interact`. Set this when you want REST traffic on prod but WebSocket traffic on a local debug server (or vice-versa). Used verbatim — supply scheme, host, port, and path. |
+| `CONVOCORE_WORKSPACE_ID` | No | — | Workspace/org UUID (`agent.ownerID`). When set, MCP avoids heavy `GET /agents` scans used only to infer the workspace id. |
 
-The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_API_BASE_URL`, and optional `CONVOCORE_INTERACT_WS_URL`. Any other variables in compose files or docs are ignored unless you wire them yourself.
+The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_API_BASE_URL`, optional `CONVOCORE_INTERACT_WS_URL`, and optional `CONVOCORE_WORKSPACE_ID`. Any other variables in compose files or docs are ignored unless you wire them yourself.
 
 ### API regions and base URLs
 
@@ -247,11 +249,11 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | Tool | Method | Path / pattern |
 |------|--------|----------------|
 | `create_agent` | POST | `/agents` body `{ agent: { … } }` (legacy/raw mode) |
-| `create_agent_from_template` | POST workflow | **Preferred** for new agents: scrape URL, synthesize prompt, then create a VG agent from a template backbone |
+| `create_agent_from_template` | POST workflow | **Preferred**: explicit `systemPrompt` / branding / merged `voiceConfig`; optional `sourceUrl` scrape + KB; then `POST /agents`; response includes **full agent** via follow-up `get_agent` |
 | `get_agent` | GET | `/agents/{agentId}` |
 | `update_agent` | PATCH | `/agents/{agentId}` body `{ agent: { … } }` |
 | `delete_agent` | DELETE | `/agents/{agentId}` |
-| `list_agents` | GET | `/agents` |
+| `list_agents` | GET | `/agents` optional `?limit=` when supported |
 | `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` (`workspaceId` optional; auto-detected when omitted) |
 | `export_agent` | GET | `/agents/{agentId}/export-template` |
 | `import_agent` | POST | `/agents/import-template` |
@@ -280,14 +282,12 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Agent tools
 
-**`create_agent_from_template`** — **Preferred for almost all from-scratch agent creation.** Required: `url`. Optional: `workspaceId`, `template`, `title`, `description`, `theme`, `language`, `roundedImageURL`, `chatBgURL`, `branding`, `proactiveMessage`, `createKbUrlDoc`, `additionalConfig`.
+**`create_agent_from_template`** — **Preferred for from-scratch chat+voice agents.** Required: **`title`**, **`systemPrompt`**, **`voiceConfig`** (must use `speechGen.provider` **`google-live`** or **`ultravox`** only — use **`search_voices`** on those providers), **`primaryColor`** (hex, from **`scrape_url`** colours when possible), **`image`** (logo URL, e.g. favicon from **`scrape_url`**). Optional: `voicePrompt` (Gemini Live systemInstruction; omitted → reuse `systemPrompt`), `workspaceId`, `description`, **`themeType`** (`light`|`dark`, default `light`), **`sourceUrl`** (optional scrape wait + excerpt), `createKbUrlDoc` (**requires `sourceUrl`** when true), `language`, `proactiveMessage`, `branding`, `chatBgURL`, `additionalConfig`.
 
-- Runs pipeline: **scrape URL -> generate start prompt -> create agent from template backbone**.
-- `workspaceId` is optional here. If omitted, MCP auto-detects it from your accessible agents.
-- The scrape step happens first so the assistant understands what the website is about before creating the agent.
-- Forces `agentPlatform` to **`vg`**.
-- `template` is one of: `blank`, `customer_support`, `real_estate`, `healthcare_secretary`, `game_npc` (default `customer_support`).
-- `createKbUrlDoc` defaults to `true` and auto-adds the source URL to KB.
+- Workflow for the AI: **`scrape_url`** first → pick colour + favicon URL → **`search_voices`** on `google-live` / `ultravox` for accents → then this tool with explicit prompts and full `voiceConfig`.
+- MCP builds **`customThemeJSONString`** (`nineColorPallet`) from **`primaryColor`** (same lightness ramp as Convocore `handleAutoGenPallet`).
+- After create, MCP calls **`get_agent`** and returns **`data.agent`** as the **full** document (plus `agentId`).
+- Prefer env **`CONVOCORE_WORKSPACE_ID`** (or explicit `workspaceId`) so MCP does not need to infer workspace from **`list_agents`**.
 
 **`create_agent`** — Legacy direct mode for advanced/manual payload control. Required: `title`. Optional: `description`, `theme`, `disabled`, `light`, `enableVertex`, `autoOpenWidget`, `voiceConfig`, **`nodes`**, `additionalConfig`.
 
@@ -301,7 +301,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`delete_agent`** — Required: `agentId`. Permanent deletion on the API side.
 
-**`list_agents`** — No parameters.
+**`list_agents`** — Optional: `limit` (capped fetch when API supports `?limit=`). Prefer **`search_agents`** or **`CONVOCORE_WORKSPACE_ID`** for large workspaces instead of dumping every agent without a cap.
 
 **`search_agents`** — Required: none. Optional: `workspaceId` (workspace/org override), `search`, `page` (default 1), `limit` (default 50), `sortBy` (`newest` | `oldest` | `alphabetical`, default `newest`), `starredOnly` (default false). If `workspaceId` is omitted, MCP auto-detects it from accessible agents.
 
