@@ -1312,6 +1312,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   const agentCore: Record<string, unknown> = {
+    agentPlatform: 'vg',
     title: titleResolved,
     description: description ?? '',
     theme: themeType === 'dark' ? 'custom-blue-dark' : 'custom-blue-light',
@@ -1335,6 +1336,8 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   const payload = { agent: mergeDeep(agentCore, additionalRest as Record<string, unknown>) };
+  // Hard-enforce VG platform for template-created agents.
+  payload.agent.agentPlatform = 'vg';
 
   stage = 'create_agent';
   const result = await client.createAgent(payload as any);
