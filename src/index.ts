@@ -127,29 +127,32 @@ const HexColorSchema = z
 const CreateAgentFromTemplateSchema = z
   .object({
     workspaceId: z.string().optional().describe('Optional workspace/org ID. Prefer setting env CONVOCORE_WORKSPACE_ID to avoid auto-detection calls.'),
-    title: z.string().min(1).describe('Agent display title'),
+    title: z.string().min(1).optional().describe('Agent display title. Optional when sourceUrl/url is provided (auto-generated from domain).'),
     description: z.string().optional().describe('Short description'),
     systemPrompt: z
       .string()
       .min(1)
-      .describe('Canonical chat / text system instructions. Also used as nodes[0].instructions when enableNodes=true.'),
+      .optional()
+      .describe('Canonical chat / text system instructions. If omitted, MCP generates one from sourceUrl/url context.'),
     voicePrompt: z
       .string()
       .optional()
       .describe(
         'Optional realtime (Gemini Live) system instruction. If omitted, systemPrompt applies to voice too.'
       ),
-    voiceConfig: AgentVoiceConfigSchema.describe(
-      'Complete voice configuration (transcriber + speechGen + config). speechGen.provider MUST be `google-live` or `ultravox`. Use search_voices against those providers only to pick voiceId (accent, gender, etc.).'
+    voiceConfig: AgentVoiceConfigSchema.optional().describe(
+      'Complete voice configuration (transcriber + speechGen + config). Recommended speechGen.provider: `google-live` or `ultravox`.'
     ),
-    primaryColor: HexColorSchema.describe(
-      'Brand hex from the site (pick one prominent color from scrape_url colour list). Drives customThemeJSONString / nineColorPallet.'
+    primaryColor: HexColorSchema.optional().describe(
+      'Brand hex from the site (pick one prominent color from scrape_url colour list). If omitted, MCP auto-detects or falls back.'
     ),
     themeType: z.enum(['light', 'dark']).optional().default('light').describe('Widget theme; defaults to light unless user asked for dark.'),
     image: z
       .string()
       .url()
+      .optional()
       .describe('Logo / rounded avatar URL — use scrape_url favicon or brand image when possible.'),
+    roundedImageURL: z.string().url().optional().describe('Backward-compatible alias for image.'),
     language: z.string().optional().default('en'),
     proactiveMessage: z.string().optional(),
     sourceUrl: z
@@ -159,30 +162,31 @@ const CreateAgentFromTemplateSchema = z
       .describe(
         'Optional URL for KB attachment (and optional scrape). For colours/favicon, call scrape_url first yourself; this field is not required to create the agent.'
       ),
+    url: z.string().url().optional().describe('Backward-compatible alias for sourceUrl.'),
+    template: z.string().optional().describe('Backward-compatible field; currently ignored in favor of explicit prompts.'),
     createKbUrlDoc: z
       .boolean()
       .optional()
       .default(false)
-      .describe('When true with sourceUrl, registers a URL KB doc after create (non-fatal on failure).'),
+      .describe('When true with sourceUrl/url, registers a URL KB doc after create (non-fatal on failure).'),
     branding: z.string().optional(),
     chatBgURL: z.string().url().optional(),
     additionalConfig: z.record(z.any()).optional(),
   })
   .superRefine((data, ctx) => {
-    const p = data.voiceConfig?.speechGen?.provider;
-    if (p !== 'google-live' && p !== 'ultravox') {
+    const source = data.sourceUrl ?? data.url;
+    if (!data.title && !source) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['voiceConfig', 'speechGen', 'provider'],
-        message:
-          'speechGen.provider must be "google-live" (Gemini Live) or "ultravox" for template chat+voice agents.',
+        path: ['title'],
+        message: 'title is required when sourceUrl/url is not provided.',
       });
     }
-    if (data.createKbUrlDoc && !data.sourceUrl) {
+    if (data.createKbUrlDoc && !source) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['sourceUrl'],
-        message: 'createKbUrlDoc requires sourceUrl.',
+        message: 'createKbUrlDoc requires sourceUrl or url.',
       });
     }
   });
@@ -1110,12 +1114,84 @@ function extractScrapedText(scrapeResult: any): string {
   return normalized.slice(0, 6000);
 }
 
+function buildPromptFromScrape(args: {
+  url: string;
+  domainLabel: string;
+  template: string;
+  scrapedText: string;
+}): string {
+  const lines = [
+    `You are the official ${args.domainLabel} assistant.`,
+    `Ground answers in information from ${args.url}.`,
+    'Never invent policies, pricing, or technical details.',
+    'If needed information is missing, say that clearly and offer to escalate to a human.',
+    'Keep replies concise, clear, and practical.',
+  ];
+
+  if (args.scrapedText.trim().length > 0) {
+    lines.push('');
+    lines.push('Website context excerpt (sanitized):');
+    lines.push(args.scrapedText.slice(0, 2200));
+  }
+
+  return lines.join('\n');
+}
+
 function buildCustomThemeJSONString(primary: string, themeType: 'light' | 'dark'): string {
   const nine = handleAutoGenPallet(primary, themeType);
   if (!nine?.length) {
     throw new Error('Failed to build nineColorPallet from primaryColor');
   }
   return JSON.stringify({ themeType, primary, nineColorPallet: nine });
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9A-Fa-f]{3}$|^#[0-9A-Fa-f]{6}$/.test(value);
+}
+
+function pickFirstString(candidates: unknown[]): string | undefined {
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) return c.trim();
+  }
+  return undefined;
+}
+
+function extractBrandingFromScrape(scrapeResult: any): { image?: string; primaryColor?: string } {
+  const page = scrapeResult?.data?.page;
+  const pages = scrapeResult?.data?.pages;
+  const image = pickFirstString([
+    page?.data?.favicon,
+    page?.favicon,
+    page?.data?.icon,
+    page?.icon,
+    page?.data?.logo,
+    page?.logo,
+    page?.imageUrl,
+    Array.isArray(pages) ? pages?.[0]?.imageUrl : undefined,
+  ]);
+
+  const colorCandidates: unknown[] = [
+    page?.data?.primaryColor,
+    page?.primaryColor,
+    ...(Array.isArray(page?.data?.colors) ? page.data.colors : []),
+    ...(Array.isArray(page?.colors) ? page.colors : []),
+    ...(Array.isArray(page?.data?.palette) ? page.data.palette : []),
+    ...(Array.isArray(page?.palette) ? page.palette : []),
+  ];
+
+  const primaryColor = colorCandidates.find((c) => {
+    if (typeof c !== 'string') return false;
+    const normalized = c.startsWith('#') ? c : `#${c}`;
+    return isHexColor(normalized);
+  });
+
+  return {
+    image,
+    primaryColor:
+      typeof primaryColor === 'string'
+        ? (primaryColor.startsWith('#') ? primaryColor : `#${primaryColor}`)
+        : undefined,
+  };
 }
 
 function buildGeminiNodesSettings(systemPrompt: string, voicePrompt?: string) {
@@ -1136,20 +1212,24 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     description,
     systemPrompt,
     voicePrompt,
-    voiceConfig,
-    primaryColor,
+    voiceConfig: inputVoiceConfig,
+    primaryColor: inputPrimaryColor,
     themeType,
-    image,
+    image: inputImage,
+    roundedImageURL,
     language,
     chatBgURL,
     branding,
     proactiveMessage,
-    sourceUrl,
+    sourceUrl: sourceUrlInput,
+    url,
     createKbUrlDoc,
     additionalConfig,
   } = args;
 
+  const sourceUrl = sourceUrlInput ?? url;
   const resolvedWorkspaceId = await resolveWorkspaceId(workspaceId);
+  let stage = 'start';
 
   let scrapeMeta: {
     success: boolean;
@@ -1157,15 +1237,56 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     url: string;
     excerpt: string;
   } | null = null;
+  let scrapedBranding: { image?: string; primaryColor?: string } = {};
 
   if (sourceUrl) {
+    stage = 'scrape_url';
     const scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, sourceUrl);
     const scrapedText = extractScrapedText(scrapeResult);
+    scrapedBranding = extractBrandingFromScrape(scrapeResult);
     scrapeMeta = {
       success: !!(scrapeResult as any)?.success,
       timedOut: !!(scrapeResult as any)?.data?.timedOut,
       url: sourceUrl,
       excerpt: scrapedText.slice(0, 1200),
+    };
+
+    if ((scrapeResult as any)?.data?.timedOut) {
+      return {
+        success: false,
+        message: 'create_agent_from_template timed out waiting for scrape_url.',
+        data: {
+          stage,
+          workspaceId: resolvedWorkspaceId,
+          scrape: scrapeMeta,
+        },
+      };
+    }
+  }
+
+  const titleResolved = title || (sourceUrl ? `${toDomainLabel(sourceUrl)} Assistant` : 'AI Assistant');
+  const generatedPrompt = sourceUrl
+    ? buildPromptFromScrape({
+        url: sourceUrl,
+        domainLabel: toDomainLabel(sourceUrl),
+        template: 'customer_support',
+        scrapedText: scrapeMeta?.excerpt ?? '',
+      })
+    : 'You are a helpful, reliable assistant. Stay factual, concise, and transparent when information is missing.';
+  const systemPromptResolved = (systemPrompt && systemPrompt.trim().length > 0 ? systemPrompt : generatedPrompt).trim();
+  const imageResolved = inputImage || roundedImageURL || scrapedBranding.image;
+  const primaryColorResolved = inputPrimaryColor || scrapedBranding.primaryColor || '#226D7A';
+  const voiceConfig = inputVoiceConfig ?? DEFAULT_TEMPLATE_VOICE_CONFIG;
+  const provider = voiceConfig?.speechGen?.provider;
+  if (provider !== 'google-live' && provider !== 'ultravox') {
+    return {
+      success: false,
+      message:
+        'voiceConfig.speechGen.provider must be `google-live` or `ultravox` for create_agent_from_template.',
+      data: {
+        stage: 'validation',
+        provider: provider ?? null,
+      },
     };
   }
 
@@ -1178,7 +1299,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   let nodesSettings: Record<string, unknown> | undefined;
 
   if (resolvedVoice.speechGen && (resolvedVoice.speechGen as { provider?: string }).provider === 'google-live') {
-    const built = buildGeminiNodesSettings(systemPrompt, voicePrompt);
+    const built = buildGeminiNodesSettings(systemPromptResolved, voicePrompt);
     nodesSettings = {
       ...extraNs,
       geminiLiveOptions: mergeDeep(
@@ -1191,20 +1312,20 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   const agentCore: Record<string, unknown> = {
-    title,
+    title: titleResolved,
     description: description ?? '',
     theme: themeType === 'dark' ? 'custom-blue-dark' : 'custom-blue-light',
     enableNodes: true,
     vg_enableUIEngine: true,
     vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
-    vg_systemPrompt: systemPrompt,
-    vg_instructions: systemPrompt,
+    vg_systemPrompt: systemPromptResolved,
+    vg_instructions: systemPromptResolved,
     voiceConfig: resolvedVoice,
-    nodes: [{ name: 'Start', instructions: systemPrompt }],
+    nodes: [{ name: 'Start', instructions: systemPromptResolved }],
     lang: language,
     proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
-    roundedImageURL: image,
-    customThemeJSONString: buildCustomThemeJSONString(primaryColor, themeType),
+    roundedImageURL: imageResolved,
+    customThemeJSONString: buildCustomThemeJSONString(primaryColorResolved, themeType),
     chatBgURL,
     branding,
   };
@@ -1215,11 +1336,13 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
 
   const payload = { agent: mergeDeep(agentCore, additionalRest as Record<string, unknown>) };
 
+  stage = 'create_agent';
   const result = await client.createAgent(payload as any);
   const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
 
   let fullAgent: any = null;
   if (createdAgentId) {
+    stage = 'get_agent';
     const got = await client.getAgent(createdAgentId);
     fullAgent = (got as any)?.data ?? got;
   }
@@ -1244,15 +1367,17 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   return {
-    success: (result as any)?.success ?? true,
-    message:
-      'Agent created from template fields. `agent` is the full document from get_agent after create (use data.agent.ID or data.agent.id).',
+    success: !!createdAgentId,
+    message: createdAgentId
+      ? 'create_agent_from_template completed successfully. Full agent payload included in data.agent.'
+      : 'create_agent_from_template did not return an agent ID from createAgent response.',
     data: {
+      stage: createdAgentId ? 'done' : stage,
       workspaceId: resolvedWorkspaceId,
       agentId: createdAgentId ?? null,
       agent: fullAgent ?? (result as any)?.data ?? result,
       createResponse: result,
-      primaryColor,
+      primaryColor: primaryColorResolved,
       themeType,
       scrape: scrapeMeta,
       kbImport: kbImportResult,
@@ -1331,7 +1456,7 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workflow: (1) Call scrape_url on the brand site — use returned favicon/ image URL as `image` and choose `primaryColor` hex from returned site colours / branding. (2) Compose `systemPrompt` (text chat behaviour) and optionally `voicePrompt` (Gemini Live / voice persona addendum — omit to reuse systemPrompt). (3) Set `speechGen.provider` to `google-live` OR `ultravox` only — use search_voices + list_models_voices on those providers to pick IDs for accents (e.g. Australian). (4) Pass the full merged `voiceConfig` (deepgram/transcriber + speechGen + config). MCP builds `customThemeJSONString` (nineColorPallet via handleAutoGenPallet equivalent), merges defaults, attaches Gemini Live nodesSettings when provider is google-live, creates the agent, then re-loads via get_agent so the response contains the FULL agent record (ID + all fields). Optional `sourceUrl` triggers a scrape wait + optional KB doc when createKbUrlDoc=true. Set env CONVOCORE_WORKSPACE_ID (or pass workspaceId) to skip slow workspace auto-detection.',
+      'PRIMARY way to create chat+voice agents. This tool now accepts BOTH explicit modern fields (title/systemPrompt/voiceConfig/primaryColor/image) and backward-compatible fields (url, roundedImageURL, template). It always returns a structured success/error payload with stage metadata so hosts can stop retry loops.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1376,6 +1501,20 @@ const tools: Tool[] = [
           format: 'uri',
           description: 'Optional — MCP waits for scrape (for KB / context). Not required to create the agent.',
         },
+        url: {
+          type: 'string',
+          format: 'uri',
+          description: 'Backward-compatible alias for sourceUrl.',
+        },
+        roundedImageURL: {
+          type: 'string',
+          format: 'uri',
+          description: 'Backward-compatible alias for image.',
+        },
+        template: {
+          type: 'string',
+          description: 'Backward-compatible field currently ignored.',
+        },
         createKbUrlDoc: {
           type: 'boolean',
           description: 'If true with sourceUrl, attach URL KB after create (errors are non-fatal).',
@@ -1387,7 +1526,7 @@ const tools: Tool[] = [
           description: 'Merged last into agent root. nodesSettings.geminiLiveOptions deep-merges with MCP defaults for google-live.',
         },
       },
-      required: ['title', 'systemPrompt', 'voiceConfig', 'primaryColor', 'image'],
+      required: [],
     },
   },
   {
@@ -2848,8 +2987,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'create_agent_from_template': {
-        const validated = CreateAgentFromTemplateSchema.parse(args);
-        const result = await createAgentFromTemplateFlow(validated);
+        const parsed = CreateAgentFromTemplateSchema.safeParse(args);
+        if (!parsed.success) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: false,
+                    message:
+                      'Invalid arguments for create_agent_from_template. Provide explicit fields (title/systemPrompt/voiceConfig/primaryColor/image) OR backward-compatible url/sourceUrl plus optional overrides.',
+                    data: {
+                      stage: 'validation',
+                      issues: parsed.error.issues,
+                    },
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        let result: any;
+        try {
+          result = await createAgentFromTemplateFlow(parsed.data);
+        } catch (error) {
+          result = {
+            success: false,
+            message:
+              error instanceof Error
+                ? `create_agent_from_template failed: ${error.message}`
+                : 'create_agent_from_template failed with unknown error',
+            data: {
+              stage: 'exception',
+            },
+          };
+        }
         return {
           content: [
             {
