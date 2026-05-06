@@ -22,6 +22,37 @@ import {
   UiEngineMessageSummary,
 } from './types.js';
 
+export class ConvoCoreApiRequestError extends Error {
+  status?: number;
+  endpoint: string;
+  method: string;
+  code?: string;
+  issues?: Array<{ message?: string; [key: string]: any }>;
+  responseData?: unknown;
+  rawBody?: string;
+
+  constructor(args: {
+    message: string;
+    endpoint: string;
+    method: string;
+    status?: number;
+    code?: string;
+    issues?: Array<{ message?: string; [key: string]: any }>;
+    responseData?: unknown;
+    rawBody?: string;
+  }) {
+    super(args.message);
+    this.name = 'ConvoCoreApiRequestError';
+    this.status = args.status;
+    this.endpoint = args.endpoint;
+    this.method = args.method;
+    this.code = args.code;
+    this.issues = args.issues;
+    this.responseData = args.responseData;
+    this.rawBody = args.rawBody;
+  }
+}
+
 /**
  * Build a compact, scannable summary of the UI Engine snapshot so the MCP
  * host can validate / describe the bot turn without re-parsing the whole
@@ -106,6 +137,7 @@ export class ConvoCoreClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.config.baseUrl}${endpoint}`;
+    const method = options.method || 'GET';
     
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.config.workspaceSecret}`,
@@ -119,19 +151,49 @@ export class ConvoCoreClient {
         headers,
       });
 
-      const data = await response.json();
+      const rawBody = await response.text();
+      let data: unknown = null;
+
+      if (rawBody.trim().length > 0) {
+        try {
+          data = JSON.parse(rawBody);
+        } catch {
+          data = rawBody;
+        }
+      }
 
       if (!response.ok) {
-        const error = data as ApiError;
-        throw new Error(error.message || `API request failed with status ${response.status}`);
+        const error = (data && typeof data === 'object' ? data : {}) as ApiError;
+        const message = error.message || `API request failed with status ${response.status}`;
+        throw new ConvoCoreApiRequestError({
+          message,
+          endpoint,
+          method,
+          status: response.status,
+          code: error.code,
+          issues: Array.isArray(error.issues) ? error.issues : undefined,
+          responseData: data,
+          rawBody,
+        });
       }
 
       return data as T;
     } catch (error) {
-      if (error instanceof Error) {
+      if (error instanceof ConvoCoreApiRequestError) {
         throw error;
       }
-      throw new Error('Unknown error occurred during API request');
+      if (error instanceof Error) {
+        throw new ConvoCoreApiRequestError({
+          message: error.message,
+          endpoint,
+          method,
+        });
+      }
+      throw new ConvoCoreApiRequestError({
+        message: 'Unknown error occurred during API request',
+        endpoint,
+        method,
+      });
     }
   }
 

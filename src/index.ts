@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
-import { ConvoCoreClient } from './convocore-client.js';
+import { ConvoCoreApiRequestError, ConvoCoreClient } from './convocore-client.js';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
@@ -1205,6 +1205,72 @@ function buildGeminiNodesSettings(systemPrompt: string, voicePrompt?: string) {
   return { geminiLiveOptions: merged };
 }
 
+function normalizeToolError(error: unknown, fallbackStage: string, extra: Record<string, unknown> = {}) {
+  if (error instanceof ConvoCoreApiRequestError) {
+    return {
+      success: false,
+      message: error.message,
+      data: {
+        stage: fallbackStage,
+        errorType: 'api_request_error',
+        endpoint: error.endpoint,
+        method: error.method,
+        status: error.status ?? null,
+        code: error.code ?? null,
+        issues: error.issues ?? [],
+        response: error.responseData ?? null,
+        rawBody: typeof error.rawBody === 'string' && error.rawBody.length > 0 ? error.rawBody : null,
+        constructiveFeedback:
+          Array.isArray(error.issues) && error.issues.length > 0
+            ? 'Fix the fields listed in `issues` and retry once with a corrected payload. Do not keep retrying nearby variants without changing those fields.'
+            : 'Inspect `response` / `rawBody` for the API-side validation or permission error, then retry once with a materially changed payload.',
+        ...extra,
+      },
+    };
+  }
+
+  if (error instanceof z.ZodError) {
+    return {
+      success: false,
+      message: 'Invalid arguments',
+      data: {
+        stage: fallbackStage,
+        errorType: 'input_validation_error',
+        issues: error.issues,
+        constructiveFeedback:
+          'Fix the argument shape according to `issues`. Retry only after changing the invalid/missing fields; do not resend the same payload.',
+        ...extra,
+      },
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      success: false,
+      message: error.message,
+      data: {
+        stage: fallbackStage,
+        errorType: 'runtime_error',
+        constructiveFeedback:
+          'A runtime error occurred. Use the stage/tool metadata to decide the next action instead of blindly retrying the same call.',
+        ...extra,
+      },
+    };
+  }
+
+  return {
+    success: false,
+    message: 'Unknown error',
+    data: {
+      stage: fallbackStage,
+      errorType: 'unknown_error',
+      constructiveFeedback:
+        'Unknown failure shape. Avoid repeated retries with the same payload; inspect the surrounding tool context and change inputs before retrying.',
+      ...extra,
+    },
+  };
+}
+
 async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
   const {
     workspaceId,
@@ -1241,7 +1307,16 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
 
   if (sourceUrl) {
     stage = 'scrape_url';
-    const scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, sourceUrl);
+    let scrapeResult: any;
+    try {
+      scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, sourceUrl);
+    } catch (error) {
+      return normalizeToolError(error, stage, {
+        tool: 'create_agent_from_template',
+        workspaceId: resolvedWorkspaceId,
+        sourceUrl,
+      });
+    }
     const scrapedText = extractScrapedText(scrapeResult);
     scrapedBranding = extractBrandingFromScrape(scrapeResult);
     scrapeMeta = {
@@ -1340,13 +1415,38 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   payload.agent.agentPlatform = 'vg';
 
   stage = 'create_agent';
-  const result = await client.createAgent(payload as any);
+  let result: any;
+  try {
+    result = await client.createAgent(payload as any);
+  } catch (error) {
+    return normalizeToolError(error, stage, {
+      tool: 'create_agent_from_template',
+      workspaceId: resolvedWorkspaceId,
+      attemptedAgent: {
+        title: payload.agent?.title ?? null,
+        agentPlatform: payload.agent?.agentPlatform ?? null,
+        theme: payload.agent?.theme ?? null,
+        hasVoiceConfig: !!payload.agent?.voiceConfig,
+        hasNodes: Array.isArray(payload.agent?.nodes),
+      },
+    });
+  }
   const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
 
   let fullAgent: any = null;
   if (createdAgentId) {
     stage = 'get_agent';
-    const got = await client.getAgent(createdAgentId);
+    let got: any;
+    try {
+      got = await client.getAgent(createdAgentId);
+    } catch (error) {
+      return normalizeToolError(error, stage, {
+        tool: 'create_agent_from_template',
+        workspaceId: resolvedWorkspaceId,
+        agentId: createdAgentId,
+        createResponse: result,
+      });
+    }
     fullAgent = (got as any)?.data ?? got;
   }
 
@@ -3018,16 +3118,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         try {
           result = await createAgentFromTemplateFlow(parsed.data);
         } catch (error) {
-          result = {
-            success: false,
-            message:
-              error instanceof Error
-                ? `create_agent_from_template failed: ${error.message}`
-                : 'create_agent_from_template failed with unknown error',
-            data: {
-              stage: 'exception',
-            },
-          };
+          result = normalizeToolError(error, 'exception', {
+            tool: 'create_agent_from_template',
+          });
         }
         return {
           content: [
@@ -4002,10 +4095,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new Error(`Invalid arguments: ${error.message}`);
-    }
-    throw error;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            normalizeToolError(error, 'tool_handler', {
+              tool: name,
+            }),
+            null,
+            2
+          ),
+        },
+      ],
+    };
   }
 });
 
