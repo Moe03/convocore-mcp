@@ -126,7 +126,6 @@ const HexColorSchema = z
 
 const CreateAgentFromTemplateSchema = z
   .object({
-    workspaceId: z.string().optional().describe('Optional workspace/org ID. Prefer setting env CONVOCORE_WORKSPACE_ID to avoid auto-detection calls.'),
     title: z.string().min(1).optional().describe('Agent display title. Optional when sourceUrl/url is provided (auto-generated from domain).'),
     description: z.string().optional().describe('Short description'),
     systemPrompt: z
@@ -147,13 +146,15 @@ const CreateAgentFromTemplateSchema = z
       'Brand hex from the site (pick one prominent color from scrape_url colour list). If omitted, MCP auto-detects or falls back.'
     ),
     themeType: z.enum(['light', 'dark']).optional().default('light').describe('Widget theme; defaults to light unless user asked for dark.'),
-    image: z
+    widgetImageUrl: z
       .string()
       .url()
       .optional()
-      .describe('Logo / rounded avatar URL — use scrape_url favicon or brand image when possible.'),
-    roundedImageURL: z.string().url().optional().describe('Backward-compatible alias for image.'),
-    language: z.string().optional().default('en'),
+      .describe('Widget avatar/logo URL shown for the assistant — use scrape_url favicon or brand image when possible.'),
+    image: z.string().url().optional().describe('Backward-compatible alias for widgetImageUrl.'),
+    roundedImageURL: z.string().url().optional().describe('Backward-compatible alias for widgetImageUrl.'),
+    defaultLanguage: z.string().optional().default('multilingual').describe('Default language mode. Defaults to multilingual.'),
+    language: z.string().optional().describe('Backward-compatible alias for defaultLanguage.'),
     proactiveMessage: z.string().optional(),
     sourceUrl: z
       .string()
@@ -171,7 +172,7 @@ const CreateAgentFromTemplateSchema = z
       .describe('When true with sourceUrl/url, registers a URL KB doc after create (non-fatal on failure).'),
     branding: z.string().optional(),
     chatBgURL: z.string().url().optional(),
-    additionalConfig: z.record(z.any()).optional(),
+    additionalConfig: z.record(z.any()).optional().describe('Optional non-vg advanced fields. Any key starting with `vg_` is ignored in template mode.'),
   })
   .superRefine((data, ctx) => {
     const source = data.sourceUrl ?? data.url;
@@ -227,7 +228,6 @@ const ListAgentsSchema = z.object({
 });
 
 const SearchAgentsSchema = z.object({
-  workspaceId: z.string().optional().describe('Optional workspace/org ID override. If omitted, MCP auto-detects it from your accessible agents'),
   search: z.string().optional().describe('Search query to find agents'),
   page: z.number().optional().default(1).describe('Page number'),
   limit: z.number().optional().default(50).describe('Results per page'),
@@ -475,7 +475,6 @@ const GetKBStatsSchema = z.object({
 // ==================== SCRAPE SCHEMAS ====================
 
 const ScrapeUrlSchema = z.object({
-  workspaceId: z.string().optional().describe('Optional workspace ID override. If omitted, MCP auto-detects it from your accessible agents.'),
   url: z.string().url().describe('The single URL to scrape'),
 });
 
@@ -1052,11 +1051,7 @@ function extractAgentsFromListResult(listResult: any): any[] {
   return [];
 }
 
-async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string> {
-  if (explicitWorkspaceId && explicitWorkspaceId.trim().length > 0) {
-    return explicitWorkspaceId.trim();
-  }
-
+async function resolveWorkspaceId(): Promise<string> {
   if (config.workspaceId && config.workspaceId.trim().length > 0) {
     return config.workspaceId.trim();
   }
@@ -1080,7 +1075,7 @@ async function resolveWorkspaceId(explicitWorkspaceId?: string): Promise<string>
   }
 
   throw new Error(
-    'Could not auto-detect workspaceId. Set env CONVOCORE_WORKSPACE_ID or pass workspaceId explicitly.'
+    'Could not auto-detect workspaceId from workspace secret context. Set CONVOCORE_WORKSPACE_ID in MCP config.'
   );
 }
 
@@ -1205,6 +1200,29 @@ function buildGeminiNodesSettings(systemPrompt: string, voicePrompt?: string) {
   return { geminiLiveOptions: merged };
 }
 
+function sanitizeTemplateAdditionalConfig(
+  input?: Record<string, unknown>
+): { nodesSettings: Record<string, unknown>; rest: Record<string, unknown> } {
+  const src = input || {};
+  const nodesSettings = isPlainRecord(src.nodesSettings)
+    ? (src.nodesSettings as Record<string, unknown>)
+    : {};
+  const rest: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(src)) {
+    if (key === 'nodesSettings') continue;
+    if (key.startsWith('vg_')) continue;
+    if (key === 'agentPlatform') continue;
+    if (key === 'enableNodes') continue;
+    if (key === 'nodes') continue;
+    if (key === 'lang') continue;
+    if (key === 'voiceConfig') continue;
+    rest[key] = value;
+  }
+
+  return { nodesSettings, rest };
+}
+
 function normalizeToolError(error: unknown, fallbackStage: string, extra: Record<string, unknown> = {}) {
   if (error instanceof ConvoCoreApiRequestError) {
     return {
@@ -1273,7 +1291,6 @@ function normalizeToolError(error: unknown, fallbackStage: string, extra: Record
 
 async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
   const {
-    workspaceId,
     title,
     description,
     systemPrompt,
@@ -1281,8 +1298,10 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     voiceConfig: inputVoiceConfig,
     primaryColor: inputPrimaryColor,
     themeType,
-    image: inputImage,
+    widgetImageUrl,
+    image,
     roundedImageURL,
+    defaultLanguage,
     language,
     chatBgURL,
     branding,
@@ -1294,7 +1313,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   } = args;
 
   const sourceUrl = sourceUrlInput ?? url;
-  const resolvedWorkspaceId = await resolveWorkspaceId(workspaceId);
+  const resolvedWorkspaceId = await resolveWorkspaceId();
   let stage = 'start';
 
   let scrapeMeta: {
@@ -1349,8 +1368,9 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       })
     : 'You are a helpful, reliable assistant. Stay factual, concise, and transparent when information is missing.';
   const systemPromptResolved = (systemPrompt && systemPrompt.trim().length > 0 ? systemPrompt : generatedPrompt).trim();
-  const imageResolved = inputImage || roundedImageURL || scrapedBranding.image;
+  const imageResolved = widgetImageUrl || image || roundedImageURL || scrapedBranding.image;
   const primaryColorResolved = inputPrimaryColor || scrapedBranding.primaryColor || '#226D7A';
+  const defaultLanguageResolved = defaultLanguage || language || 'multilingual';
   const voiceConfig = inputVoiceConfig ?? DEFAULT_TEMPLATE_VOICE_CONFIG;
   const provider = voiceConfig?.speechGen?.provider;
   if (provider !== 'google-live' && provider !== 'ultravox') {
@@ -1368,8 +1388,10 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   const templateVoiceBase = JSON.parse(JSON.stringify(DEFAULT_TEMPLATE_VOICE_CONFIG)) as Record<string, unknown>;
   const resolvedVoice = mergeDeep(templateVoiceBase, voiceConfig as Record<string, unknown>);
 
-  const { nodesSettings: nodesFromAdditional, ...additionalRest } = additionalConfig || {};
-  const extraNs = (nodesFromAdditional ?? {}) as Record<string, unknown>;
+  const sanitizedAdditional = sanitizeTemplateAdditionalConfig(
+    (additionalConfig || {}) as Record<string, unknown>
+  );
+  const extraNs = sanitizedAdditional.nodesSettings;
 
   let nodesSettings: Record<string, unknown> | undefined;
 
@@ -1398,7 +1420,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     vg_instructions: systemPromptResolved,
     voiceConfig: resolvedVoice,
     nodes: [{ name: 'Start', instructions: systemPromptResolved }],
-    lang: language,
+    lang: defaultLanguageResolved,
     proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
     roundedImageURL: imageResolved,
     customThemeJSONString: buildCustomThemeJSONString(primaryColorResolved, themeType),
@@ -1410,9 +1432,14 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     agentCore.nodesSettings = nodesSettings;
   }
 
-  const payload = { agent: mergeDeep(agentCore, additionalRest as Record<string, unknown>) };
-  // Hard-enforce VG platform for template-created agents.
+  const payload = { agent: mergeDeep(agentCore, sanitizedAdditional.rest as Record<string, unknown>) };
+  // Hard-enforce template invariants.
   payload.agent.agentPlatform = 'vg';
+  payload.agent.enableNodes = true;
+  payload.agent.vg_enableUIEngine = true;
+  payload.agent.vg_defaultModel = DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
+  payload.agent.vg_systemPrompt = systemPromptResolved;
+  payload.agent.vg_instructions = systemPromptResolved;
 
   stage = 'create_agent';
   let result: any;
@@ -1559,14 +1586,10 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. This tool now accepts BOTH explicit modern fields (title/systemPrompt/voiceConfig/primaryColor/image) and backward-compatible fields (url, roundedImageURL, template). It always returns a structured success/error payload with stage metadata so hosts can stop retry loops.',
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, and vg_* overrides are blocked from additionalConfig.',
     inputSchema: {
       type: 'object',
       properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'Optional workspace/org ID. Prefer CONVOCORE_WORKSPACE_ID in env for faster startup.',
-        },
         title: { type: 'string', description: 'Agent title' },
         description: { type: 'string', description: 'Short description' },
         systemPrompt: {
@@ -1592,12 +1615,18 @@ const tools: Tool[] = [
           enum: ['light', 'dark'],
           description: 'Widget theme (default light unless user wants dark)',
         },
+        widgetImageUrl: {
+          type: 'string',
+          format: 'uri',
+          description: 'Widget assistant avatar/logo URL (favicon from scrape_url is ideal).',
+        },
         image: {
           type: 'string',
           format: 'uri',
-          description: 'Logo / rounded avatar URL (favicon from scrape_url is ideal).',
+          description: 'Backward-compatible alias for widgetImageUrl.',
         },
-        language: { type: 'string', description: 'BCP language (default en)' },
+        defaultLanguage: { type: 'string', description: 'Default language mode (default: multilingual).' },
+        language: { type: 'string', description: 'Backward-compatible alias for defaultLanguage.' },
         proactiveMessage: { type: 'string', description: 'Widget greeting bubble' },
         sourceUrl: {
           type: 'string',
@@ -1626,7 +1655,7 @@ const tools: Tool[] = [
         chatBgURL: { type: 'string', format: 'uri' },
         additionalConfig: {
           type: 'object',
-          description: 'Merged last into agent root. nodesSettings.geminiLiveOptions deep-merges with MCP defaults for google-live.',
+          description: 'Merged last into agent root with safeguards. Keys starting with vg_ (and core template keys) are ignored.',
         },
       },
       required: [],
@@ -1750,14 +1779,10 @@ const tools: Tool[] = [
   {
     name: 'search_agents',
     description:
-      'Search/filter ConvoCore agents. Prefer this for most automation. If workspaceId is omitted, MCP auto-detects it from accessible agents. workspaceId is the same value as agent.ownerID (ownerID is read-only on the agent document). Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
+      'Search/filter ConvoCore agents. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
     inputSchema: {
       type: 'object',
       properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'Optional workspace/org ID override. If omitted, MCP auto-detects it from accessible agents.',
-        },
         search: {
           type: 'string',
           description: 'Search query to find agents',
@@ -2324,14 +2349,10 @@ const tools: Tool[] = [
   // ==================== SCRAPE TOOL ====================
   {
     name: 'scrape_url',
-    description: 'Scrape exactly one URL and wait for the scrape result before returning. If workspaceId is omitted, MCP auto-detects it from accessible agents. This tool does not follow discovered links and does not expose job options.',
+    description: 'Scrape exactly one URL and wait for the scrape result before returning. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. This tool does not follow discovered links and does not expose job options.',
     inputSchema: {
       type: 'object',
       properties: {
-        workspaceId: {
-          type: 'string',
-          description: 'Optional workspace ID override. If omitted, MCP auto-detects it from accessible agents.',
-        },
         url: {
           type: 'string',
           format: 'uri',
@@ -3100,7 +3121,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   {
                     success: false,
                     message:
-                      'Invalid arguments for create_agent_from_template. Provide explicit fields (title/systemPrompt/voiceConfig/primaryColor/image) OR backward-compatible url/sourceUrl plus optional overrides.',
+                      'Invalid arguments for create_agent_from_template. Provide explicit fields (title/systemPrompt/voiceConfig/primaryColor/widgetImageUrl) OR backward-compatible url/sourceUrl aliases plus optional overrides.',
                     data: {
                       stage: 'validation',
                       issues: parsed.error.issues,
@@ -3197,7 +3218,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_agents': {
         const validated = SearchAgentsSchema.parse(args);
-        const resolvedWorkspaceId = await resolveWorkspaceId(validated.workspaceId);
+        const resolvedWorkspaceId = await resolveWorkspaceId();
         const result = await client.searchAgents(
           resolvedWorkspaceId,
           validated.search,
@@ -3501,7 +3522,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'scrape_url': {
         const validated = ScrapeUrlSchema.parse(args);
-        const resolvedWorkspaceId = await resolveWorkspaceId(validated.workspaceId);
+        const resolvedWorkspaceId = await resolveWorkspaceId();
         const result = await client.scrapeUrl(resolvedWorkspaceId, validated.url);
         return {
           content: [

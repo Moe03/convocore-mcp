@@ -254,7 +254,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `update_agent` | PATCH | `/agents/{agentId}` body `{ agent: { … } }` |
 | `delete_agent` | DELETE | `/agents/{agentId}` |
 | `list_agents` | GET | `/agents` optional `?limit=` when supported |
-| `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` (`workspaceId` optional; auto-detected when omitted) |
+| `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` (workspace resolved internally from MCP config/workspace secret context) |
 | `export_agent` | GET | `/agents/{agentId}/export-template` |
 | `import_agent` | POST | `/agents/import-template` |
 | `get_agent_usage` | POST | `/agents/{agentId}/usage` body `{ range }` |
@@ -282,12 +282,12 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Agent tools
 
-**`create_agent_from_template`** — **Preferred for from-scratch chat+voice agents.** Required: **`title`**, **`systemPrompt`**, **`voiceConfig`** (must use `speechGen.provider` **`google-live`** or **`ultravox`** only — use **`search_voices`** on those providers), **`primaryColor`** (hex, from **`scrape_url`** colours when possible), **`image`** (logo URL, e.g. favicon from **`scrape_url`**). Optional: `voicePrompt` (Gemini Live systemInstruction; omitted → reuse `systemPrompt`), `workspaceId`, `description`, **`themeType`** (`light`|`dark`, default `light`), **`sourceUrl`** (optional scrape wait + excerpt), `createKbUrlDoc` (**requires `sourceUrl`** when true), `language`, `proactiveMessage`, `branding`, `chatBgURL`, `additionalConfig`.
+**`create_agent_from_template`** — **Preferred for from-scratch chat+voice agents.** Workspace is resolved internally (no `workspaceId` input). Recommended explicit fields: `title`, `systemPrompt`, `voiceConfig` (must use `speechGen.provider` **`google-live`** or **`ultravox`** only — use **`search_voices`** on those providers), `primaryColor` (hex, from **`scrape_url`** colours when possible), `widgetImageUrl` (logo URL, e.g. favicon from **`scrape_url`**). Optional: `voicePrompt` (Gemini Live systemInstruction; omitted → reuse `systemPrompt`), `description`, **`themeType`** (`light`|`dark`, default `light`), **`sourceUrl`** (optional scrape wait + excerpt), `createKbUrlDoc` (**requires `sourceUrl`** when true), `defaultLanguage` (default `multilingual`), `proactiveMessage`, `branding`, `chatBgURL`, `additionalConfig`.
 
 - Workflow for the AI: **`scrape_url`** first → pick colour + favicon URL → **`search_voices`** on `google-live` / `ultravox` for accents → then this tool with explicit prompts and full `voiceConfig`.
 - MCP builds **`customThemeJSONString`** (`nineColorPallet`) from **`primaryColor`** (same lightness ramp as Convocore `handleAutoGenPallet`).
 - After create, MCP calls **`get_agent`** and returns **`data.agent`** as the **full** document (plus `agentId`).
-- Prefer env **`CONVOCORE_WORKSPACE_ID`** (or explicit `workspaceId`) so MCP does not need to infer workspace from **`list_agents`**.
+- Prefer env **`CONVOCORE_WORKSPACE_ID`** so MCP does not need to infer workspace from **`list_agents`**.
 
 **`create_agent`** — Legacy direct mode for advanced/manual payload control. Required: `title`. Optional: `description`, `theme`, `disabled`, `light`, `enableVertex`, `autoOpenWidget`, `voiceConfig`, **`nodes`**, `additionalConfig`.
 
@@ -303,7 +303,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`list_agents`** — Optional: `limit` (capped fetch when API supports `?limit=`). Prefer **`search_agents`** or **`CONVOCORE_WORKSPACE_ID`** for large workspaces instead of dumping every agent without a cap.
 
-**`search_agents`** — Required: none. Optional: `workspaceId` (workspace/org override), `search`, `page` (default 1), `limit` (default 50), `sortBy` (`newest` | `oldest` | `alphabetical`, default `newest`), `starredOnly` (default false). If `workspaceId` is omitted, MCP auto-detects it from accessible agents.
+**`search_agents`** — Required: none. Optional: `search`, `page` (default 1), `limit` (default 50), `sortBy` (`newest` | `oldest` | `alphabetical`, default `newest`), `starredOnly` (default false). Workspace is resolved internally by MCP.
 
 **`export_agent`** — Required: `agentId`. Returns template JSON for backup/migration.
 
@@ -353,7 +353,7 @@ Optional: `metadata`, `tags`, `refreshRate` — `6h` | `12h` | `24h` | `7d` | `n
 
 ### Scrape tool
 
-**`scrape_url`** — Required: `url`. Optional: `workspaceId` (workspace override). If omitted, MCP auto-detects it from accessible agents. Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
+**`scrape_url`** — Required: `url`. Workspace is resolved internally by MCP (no `workspaceId` input). Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
 
 ### Interact (WebSocket) tool
 
