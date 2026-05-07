@@ -1461,6 +1461,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   const createdAgentId = (result as any)?.data?.ID || (result as any)?.data?.id;
 
   let fullAgent: any = null;
+  let platformRepair: any = null;
   if (createdAgentId) {
     stage = 'get_agent';
     let got: any;
@@ -1475,6 +1476,75 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       });
     }
     fullAgent = (got as any)?.data ?? got;
+
+    const currentPlatform = fullAgent?.agentPlatform;
+    if (currentPlatform !== 'vg') {
+      stage = 'repair_agent_platform';
+      let repairResult: any;
+      try {
+        repairResult = await client.updateAgent(createdAgentId, {
+          agent: {
+            agentPlatform: 'vg',
+            enableNodes: true,
+            vg_enableUIEngine: true,
+            vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+            vg_systemPrompt: systemPromptResolved,
+            vg_instructions: systemPromptResolved,
+            nodes: [{ name: 'Start', instructions: systemPromptResolved }],
+            voiceConfig: resolvedVoice as any,
+            lang: defaultLanguageResolved,
+            roundedImageURL: imageResolved,
+            customThemeJSONString: buildCustomThemeJSONString(primaryColorResolved, themeType),
+          },
+        });
+      } catch (error) {
+        return normalizeToolError(error, stage, {
+          tool: 'create_agent_from_template',
+          workspaceId: resolvedWorkspaceId,
+          agentId: createdAgentId,
+          observedAgentPlatform: currentPlatform ?? null,
+          constructiveFeedback:
+            'The API created the agent as non-vg. MCP tried to repair it with update_agent and that request failed.',
+        });
+      }
+
+      platformRepair = repairResult;
+
+      stage = 'verify_agent_platform';
+      let verifyResult: any;
+      try {
+        verifyResult = await client.getAgent(createdAgentId);
+      } catch (error) {
+        return normalizeToolError(error, stage, {
+          tool: 'create_agent_from_template',
+          workspaceId: resolvedWorkspaceId,
+          agentId: createdAgentId,
+          repairResponse: repairResult,
+        });
+      }
+
+      fullAgent = (verifyResult as any)?.data ?? verifyResult;
+
+      if (fullAgent?.agentPlatform !== 'vg') {
+        return {
+          success: false,
+          message:
+            'create_agent_from_template created an agent, but the upstream API still reports agentPlatform != "vg" after repair.',
+          data: {
+            stage,
+            tool: 'create_agent_from_template',
+            workspaceId: resolvedWorkspaceId,
+            agentId: createdAgentId,
+            observedAgentPlatform: fullAgent?.agentPlatform ?? null,
+            createResponse: result,
+            repairResponse: repairResult,
+            agent: fullAgent,
+            constructiveFeedback:
+              'Do not retry this same payload repeatedly. The upstream API is overriding platform selection. Escalate with the returned create/repair responses.',
+          },
+        };
+      }
+    }
   }
 
   let kbImportResult: any = null;
@@ -1507,6 +1577,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       agentId: createdAgentId ?? null,
       agent: fullAgent ?? (result as any)?.data ?? result,
       createResponse: result,
+      platformRepair,
       primaryColor: primaryColorResolved,
       themeType,
       scrape: scrapeMeta,

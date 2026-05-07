@@ -47,6 +47,7 @@ export interface VoiceConfig {
 export interface Agent {
   ID?: string;
   id?: string;
+  agentPlatform?: string;
   title?: string;
   description?: string;
   theme?: string;
