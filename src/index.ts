@@ -21,6 +21,12 @@ import { getConfig } from './config.js';
 import { ConvoCoreApiRequestError, ConvoCoreClient } from './convocore-client.js';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
+import {
+  TemplateIdempotencyStore,
+  computeTemplateIdempotencyKey,
+  runTemplateIdempotent,
+} from './template-idempotency.js';
+import { TEMPLATE_START_NODE_DEFAULTS, normalizeTemplateStartNodeArray } from './template-start-node.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
@@ -30,6 +36,7 @@ const execAsync = promisify(exec);
 // Initialize configuration and client
 const config = getConfig();
 const client = new ConvoCoreClient(config);
+const templateIdempotencyStore = new TemplateIdempotencyStore();
 
 // Define tool schemas
 const AgentNodeSchema = z
@@ -153,7 +160,11 @@ const CreateAgentFromTemplateSchema = z
       .describe('Widget avatar/logo URL shown for the assistant — use scrape_url favicon or brand image when possible.'),
     image: z.string().url().optional().describe('Backward-compatible alias for widgetImageUrl.'),
     roundedImageURL: z.string().url().optional().describe('Backward-compatible alias for widgetImageUrl.'),
-    defaultLanguage: z.string().optional().default('multilingual').describe('Default language mode. Defaults to multilingual.'),
+    defaultLanguage: z
+      .string()
+      .optional()
+      .default('en')
+      .describe('Default language. Must be a single language code/name (never "multilingual"). Defaults to "en".'),
     language: z.string().optional().describe('Backward-compatible alias for defaultLanguage.'),
     proactiveMessage: z.string().optional(),
     sourceUrl: z
@@ -170,6 +181,12 @@ const CreateAgentFromTemplateSchema = z
       .optional()
       .default(false)
       .describe('When true with sourceUrl/url, registers a URL KB doc after create (non-fatal on failure).'),
+    requestId: z
+      .string()
+      .optional()
+      .describe(
+        'Optional idempotency key. Reusing the same requestId returns the already-created agent instead of creating a duplicate.'
+      ),
     branding: z.string().optional(),
     chatBgURL: z.string().url().optional(),
     additionalConfig: z.record(z.any()).optional().describe('Optional non-vg advanced fields. Any key starting with `vg_` is ignored in template mode.'),
@@ -1004,6 +1021,39 @@ const DEFAULT_TEMPLATE_VOICE_CONFIG = {
   },
 } as const;
 
+function buildTemplateStartNode(systemPrompt: string) {
+  return {
+    ...TEMPLATE_START_NODE_DEFAULTS,
+    llmConfig: { ...TEMPLATE_START_NODE_DEFAULTS.llmConfig },
+    instructions: systemPrompt,
+  };
+}
+
+function normalizeTemplateAgentNodesForCreate(nodes: unknown): unknown[] {
+  const normalized = normalizeTemplateStartNodeArray(nodes);
+  if (normalized.patchedFields.length > 0) {
+    console.error(
+      `[debug] create_agent_from_template normalized start node at index ${normalized.startNodeIndex}; autoFilledFields=${normalized.patchedFields.join(',')}`
+    );
+  }
+  return normalized.nodes;
+}
+
+function resolveSingleLanguage(input: unknown): string {
+  if (typeof input !== 'string') {
+    return 'en';
+  }
+  const trimmed = input.trim();
+  if (!trimmed) return 'en';
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'multilingual' || normalized === 'multi-language' || normalized === 'multi language') {
+    return 'en';
+  }
+
+  return trimmed;
+}
+
 function toDomainLabel(url: string): string {
   try {
     const hostname = new URL(url).hostname.replace(/^www\./i, '');
@@ -1049,6 +1099,27 @@ function extractAgentsFromListResult(listResult: any): any[] {
   if (Array.isArray(listResult?.agents)) return listResult.agents;
   if (Array.isArray(listResult?.data?.agents)) return listResult.data.agents;
   return [];
+}
+
+function getAgentId(agent: any): string | null {
+  const id = agent?.ID ?? agent?.id;
+  return typeof id === 'string' && id.trim().length > 0 ? id.trim() : null;
+}
+
+async function findExistingAgentByExactTitle(title: string): Promise<any | null> {
+  const listResult = await client.listAgents({ limit: 500 });
+  const agents = extractAgentsFromListResult(listResult);
+  const matches = agents.filter(
+    (agent: any) => typeof agent?.title === 'string' && agent.title.trim() === title
+  );
+  if (matches.length === 0) return null;
+
+  const sorted = matches.sort((a: any, b: any) => {
+    const ta = Number(a?.lastModified ?? a?.createdAtUNIX ?? 0);
+    const tb = Number(b?.lastModified ?? b?.createdAtUNIX ?? 0);
+    return tb - ta;
+  });
+  return sorted[0] ?? null;
 }
 
 async function resolveWorkspaceId(): Promise<string> {
@@ -1109,27 +1180,217 @@ function extractScrapedText(scrapeResult: any): string {
   return normalized.slice(0, 6000);
 }
 
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 24);
+}
+
+function uniqueByNormalized(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const key = item.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function scoreSentenceForBusinessFacts(sentence: string): number {
+  const s = sentence.toLowerCase();
+  let score = 0;
+  const strongSignals = [
+    'service',
+    'services',
+    'product',
+    'products',
+    'solution',
+    'solutions',
+    'membership',
+    'subscription',
+    'pricing',
+    'plan',
+    'plans',
+    'support',
+    'warranty',
+    'guarantee',
+    'shipping',
+    'delivery',
+    'hours',
+    'location',
+    'contact',
+    'about',
+    'founded',
+    'experience',
+    'specialize',
+    'industr',
+    'feature',
+    'benefit',
+  ];
+
+  for (const token of strongSignals) {
+    if (s.includes(token)) score += 2;
+  }
+  if (s.includes(':')) score += 1;
+  if (s.includes(',')) score += 1;
+  if (/\b(24\/7|same day|free|certified|licensed|award|official)\b/i.test(s)) score += 2;
+  if (/\b\d{4}\b/.test(s)) score += 1; // founding year / milestones
+  if (sentence.length > 260) score -= 1;
+  return score;
+}
+
+function extractCompanyFacts(scrapedText: string, maxFacts: number = 14): string[] {
+  const sentences = uniqueByNormalized(splitSentences(scrapedText));
+  const ranked = sentences
+    .map((sentence) => ({ sentence, score: scoreSentenceForBusinessFacts(sentence) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return ranked.slice(0, maxFacts).map((x) => x.sentence);
+}
+
+function extractServiceCatalogHints(scrapedText: string, maxItems: number = 12): string[] {
+  const candidates = uniqueByNormalized(
+    splitSentences(scrapedText).filter((s) =>
+      /\b(service|services|product|products|offer|offers|provide|provides|specialize|solutions|plans|packages|membership|subscription)\b/i.test(
+        s
+      )
+    )
+  );
+
+  return candidates.slice(0, maxItems);
+}
+
+function choosePersonaName(domainLabel: string): string {
+  const names = ['Avery', 'Maya', 'Jordan', 'Riley', 'Casey', 'Taylor', 'Sam', 'Alex'];
+  const seed = [...domainLabel].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return names[seed % names.length];
+}
+
+function inferBrandStyle(scrapedText: string): string {
+  const s = scrapedText.toLowerCase();
+  if (/\b(luxury|premium|exclusive|bespoke|concierge|high-end)\b/.test(s)) {
+    return 'premium, polished, consultative, detail-oriented';
+  }
+  if (/\b(legal|law|medical|healthcare|finance|bank|insurance|compliance)\b/.test(s)) {
+    return 'professional, precise, compliance-aware, risk-conscious';
+  }
+  if (/\b(game|gaming|play|entertainment|stream|community|creator)\b/.test(s)) {
+    return 'energetic, clear, supportive, user-friendly';
+  }
+  if (/\b(education|school|learning|nonprofit|charity|community)\b/.test(s)) {
+    return 'warm, encouraging, patient, explanatory';
+  }
+  return 'professional, friendly, concise, practical';
+}
+
+function bullets(items: string[], fallback: string): string {
+  if (!items.length) return `- ${fallback}`;
+  return items.map((item) => `- ${item}`).join('\n');
+}
+
 function buildPromptFromScrape(args: {
   url: string;
   domainLabel: string;
   template: string;
   scrapedText: string;
 }): string {
-  const lines = [
-    `You are the official ${args.domainLabel} assistant.`,
-    `Ground answers in information from ${args.url}.`,
-    'Never invent policies, pricing, or technical details.',
-    'If needed information is missing, say that clearly and offer to escalate to a human.',
-    'Keep replies concise, clear, and practical.',
-  ];
+  const personaName = choosePersonaName(args.domainLabel);
+  const style = inferBrandStyle(args.scrapedText);
+  const factBullets = extractCompanyFacts(args.scrapedText, 14);
+  const serviceBullets = extractServiceCatalogHints(args.scrapedText, 12);
 
-  if (args.scrapedText.trim().length > 0) {
-    lines.push('');
-    lines.push('Website context excerpt (sanitized):');
-    lines.push(args.scrapedText.slice(0, 2200));
-  }
+  return [
+    `You are ${personaName}, the official AI assistant for ${args.domainLabel}.`,
+    '',
+    '## Character, Role, and Style',
+    `- Identity: ${personaName}, a dedicated ${args.domainLabel} company representative.`,
+    `- Core style: ${style}.`,
+    '- Personality: confident, calm, helpful, proactive, and never robotic.',
+    '- Primary mission: resolve user needs accurately using verified company information.',
+    '',
+    '## Company Profile and Facts (authoritative context)',
+    bullets(
+      factBullets,
+      `Use ${args.url} as the primary source of truth for company details, policies, and offerings.`
+    ),
+    '',
+    '## Services / Products / Offerings (operational context)',
+    bullets(
+      serviceBullets,
+      'If a service/product list is not explicit, ask a short clarifying question and proceed safely.'
+    ),
+    '',
+    '## Critical Behavior Rules',
+    '- Never invent policies, pricing, guarantees, legal claims, technical specs, or timelines.',
+    '- If information is missing or uncertain, say that clearly and ask a focused follow-up question.',
+    '- If still uncertain, offer escalation to a human/team member with a concise handoff summary.',
+    '- Prefer actionable answers: next steps, options, and what information is needed from the user.',
+    '',
+    '## Text-First Response Optimization (default)',
+    '- Optimize for chat/text first: concise, high-signal, structured answers.',
+    '- Use clean Markdown when useful (short headings, bullets, checklists, short tables only when they add clarity).',
+    '- Keep replies compact: usually 3-8 sentences unless the user asks for a deep dive.',
+    '- Start with the direct answer first, then supporting detail.',
+    '',
+    '## Voice Behavior (only when user asks for voice/call style)',
+    '- If the user explicitly asks for voice/call output, adapt to short spoken phrasing.',
+    '- For voice mode: shorter sentences, fewer dense lists, explicit verbal transitions, and confirmation checks.',
+    '- Even in voice mode, factual constraints remain strict (no invention).',
+    '',
+    '## Personalization and User Preference Handling',
+    '- Detect user intent quickly (support, pricing, features, account, troubleshooting, policy).',
+    '- Mirror user communication style while staying professional and brand-safe.',
+    '- Prioritize user-stated preferences (tone, format, depth, urgency) when they do not conflict with policy.',
+    '',
+    '## Escalation Trigger Examples',
+    '- Billing/payment disputes requiring account-level action.',
+    '- Security/privacy incidents.',
+    '- Legal/compliance-sensitive requests beyond documented policy.',
+    '- Any request needing internal systems or non-public data.',
+    '',
+    '## Grounding Source',
+    `- Website source: ${args.url}`,
+    '- Treat this source as canonical for company-specific statements.',
+    '',
+    '## Sanitized Source Excerpt',
+    args.scrapedText.slice(0, 3200) || '(No extractable text was available from scrape.)',
+  ].join('\n');
+}
 
-  return lines.join('\n');
+function buildPromptWithoutScrape(companyLabel: string): string {
+  const personaName = choosePersonaName(companyLabel);
+  return [
+    `You are ${personaName}, the official AI assistant for ${companyLabel}.`,
+    '',
+    '## Character, Role, and Style',
+    '- Professional, warm, concise, practical, and never robotic.',
+    '- Act like a high-performing support + product specialist for the company.',
+    '',
+    '## Core Objectives',
+    '- Resolve user requests quickly with clear, trustworthy guidance.',
+    '- Gather missing context with short, focused questions.',
+    '- Provide actionable next steps, not generic filler.',
+    '',
+    '## Text-First Optimization',
+    '- Default to text/chat excellence: direct answer first, then concise details.',
+    '- Use clean Markdown for readability (bullets/checklists) when helpful.',
+    '',
+    '## Voice Mode (on explicit request)',
+    '- If user asks for voice/call behavior, shift to short spoken-style phrasing.',
+    '- Keep answers factual and concise; confirm key points out loud.',
+    '',
+    '## Safety and Accuracy',
+    '- Never invent company policies, pricing, legal claims, or unavailable features.',
+    '- If unsure, clearly say what is unknown and offer escalation.',
+    '',
+    '## Personalization',
+    '- Mirror user tone and depth preference while keeping brand professionalism.',
+    '- Be proactive: suggest the most relevant next step based on user intent.',
+  ].join('\n');
 }
 
 function buildCustomThemeJSONString(primary: string, themeType: 'light' | 'dark'): string {
@@ -1289,7 +1550,95 @@ function normalizeToolError(error: unknown, fallbackStage: string, extra: Record
   };
 }
 
+function normalizeErrorDetails(error: unknown) {
+  if (error instanceof ConvoCoreApiRequestError) {
+    return {
+      errorType: 'api_request_error',
+      message: error.message,
+      endpoint: error.endpoint,
+      method: error.method,
+      status: error.status ?? null,
+      code: error.code ?? null,
+      issues: error.issues ?? [],
+      response: error.responseData ?? null,
+      rawBody: typeof error.rawBody === 'string' && error.rawBody.length > 0 ? error.rawBody : null,
+    };
+  }
+
+  if (error instanceof z.ZodError) {
+    return {
+      errorType: 'input_validation_error',
+      message: 'Invalid arguments',
+      issues: error.issues,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      errorType: 'runtime_error',
+      message: error.message,
+    };
+  }
+
+  return {
+    errorType: 'unknown_error',
+    message: 'Unknown error',
+  };
+}
+
+async function resolveExistingTemplateAgentByIdempotencyKey(
+  key: string
+): Promise<{ agentId: string; agent: any } | null> {
+  const existingAgentId = await templateIdempotencyStore.getAgentId(key);
+  if (!existingAgentId) return null;
+
+  try {
+    const existing = await client.getAgent(existingAgentId);
+    const agent = (existing as any)?.data ?? existing;
+    return { agentId: existingAgentId, agent };
+  } catch {
+    await templateIdempotencyStore.deleteKey(key);
+    return null;
+  }
+}
+
 async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
+  const idempotencyKey = computeTemplateIdempotencyKey(args as Record<string, unknown>, {
+    baseUrl: config.baseUrl,
+    workspaceSecret: config.workspaceSecret,
+  });
+
+  return runTemplateIdempotent(idempotencyKey, async () => {
+    const existing = await resolveExistingTemplateAgentByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      return {
+        success: true,
+        message:
+          'create_agent_from_template idempotency hit: returning previously created agent for this request.',
+        data: {
+          stage: 'idempotency_hit',
+          idempotencyKey,
+          agentId: existing.agentId,
+          agent: existing.agent,
+          warning:
+            'This request was already fulfilled. Returning the existing agent to prevent duplicate creation.',
+        },
+      };
+    }
+
+    const result = await createAgentFromTemplateFlowCore(args);
+    const createdAgentId = (result as any)?.data?.agentId;
+    if (typeof createdAgentId === 'string' && createdAgentId.trim().length > 0) {
+      await templateIdempotencyStore.setAgentId(idempotencyKey, createdAgentId.trim());
+      if ((result as any)?.data) {
+        (result as any).data.idempotencyKey = idempotencyKey;
+      }
+    }
+    return result;
+  });
+}
+
+async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
   const {
     title,
     description,
@@ -1359,6 +1708,42 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   const titleResolved = title || (sourceUrl ? `${toDomainLabel(sourceUrl)} Assistant` : 'AI Assistant');
+  let existingByTitle: any = null;
+  try {
+    existingByTitle = await findExistingAgentByExactTitle(titleResolved);
+  } catch {
+    existingByTitle = null;
+  }
+
+  if (existingByTitle) {
+    const existingId = getAgentId(existingByTitle);
+    if (existingId) {
+      console.error(
+        `[debug] create_agent_from_template title-level dedupe hit; title=\"${titleResolved}\" existingAgentId=${existingId}`
+      );
+      let fullExisting: any = null;
+      try {
+        const fetched = await client.getAgent(existingId);
+        fullExisting = (fetched as any)?.data ?? fetched;
+      } catch {
+        fullExisting = existingByTitle;
+      }
+      return {
+        success: true,
+        message:
+          'create_agent_from_template title dedupe hit: returning existing agent with the same title to prevent duplicate creation.',
+        data: {
+          stage: 'title_dedupe_hit',
+          workspaceId: resolvedWorkspaceId,
+          agentId: existingId,
+          agent: fullExisting,
+          warning:
+            'An agent with this exact title already exists. MCP returned it instead of creating another one.',
+        },
+      };
+    }
+  }
+
   const generatedPrompt = sourceUrl
     ? buildPromptFromScrape({
         url: sourceUrl,
@@ -1366,11 +1751,11 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
         template: 'customer_support',
         scrapedText: scrapeMeta?.excerpt ?? '',
       })
-    : 'You are a helpful, reliable assistant. Stay factual, concise, and transparent when information is missing.';
+    : buildPromptWithoutScrape(titleResolved);
   const systemPromptResolved = (systemPrompt && systemPrompt.trim().length > 0 ? systemPrompt : generatedPrompt).trim();
   const imageResolved = widgetImageUrl || image || roundedImageURL || scrapedBranding.image;
   const primaryColorResolved = inputPrimaryColor || scrapedBranding.primaryColor || '#226D7A';
-  const defaultLanguageResolved = defaultLanguage || language || 'multilingual';
+  const defaultLanguageResolved = resolveSingleLanguage(defaultLanguage ?? language ?? 'en');
   const voiceConfig = inputVoiceConfig ?? DEFAULT_TEMPLATE_VOICE_CONFIG;
   const provider = voiceConfig?.speechGen?.provider;
   if (provider !== 'google-live' && provider !== 'ultravox') {
@@ -1419,7 +1804,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     vg_systemPrompt: systemPromptResolved,
     vg_instructions: systemPromptResolved,
     voiceConfig: resolvedVoice,
-    nodes: [{ name: 'Start', instructions: systemPromptResolved }],
+    nodes: [buildTemplateStartNode(systemPromptResolved)],
     lang: defaultLanguageResolved,
     proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
     roundedImageURL: imageResolved,
@@ -1433,6 +1818,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   }
 
   const payload = { agent: mergeDeep(agentCore, sanitizedAdditional.rest as Record<string, unknown>) };
+  payload.agent.nodes = normalizeTemplateAgentNodesForCreate(payload.agent.nodes);
   // Hard-enforce template invariants.
   payload.agent.agentPlatform = 'vg';
   payload.agent.enableNodes = true;
@@ -1468,12 +1854,21 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
     try {
       got = await client.getAgent(createdAgentId);
     } catch (error) {
-      return normalizeToolError(error, stage, {
-        tool: 'create_agent_from_template',
-        workspaceId: resolvedWorkspaceId,
-        agentId: createdAgentId,
-        createResponse: result,
-      });
+      return {
+        success: true,
+        message:
+          'create_agent_from_template created the agent, but post-create get_agent failed. Returning create response to avoid duplicate retries.',
+        data: {
+          stage: 'created_but_get_agent_failed',
+          tool: 'create_agent_from_template',
+          workspaceId: resolvedWorkspaceId,
+          agentId: createdAgentId,
+          createResponse: result,
+          warning:
+            'Agent was created successfully. Do NOT call create_agent_from_template again for the same request; use get_agent/update_agent with the returned agentId.',
+          postCreateError: normalizeErrorDetails(error),
+        },
+      };
     }
     fullAgent = (got as any)?.data ?? got;
 
@@ -1482,7 +1877,7 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       stage = 'repair_agent_platform';
       let repairResult: any;
       try {
-        repairResult = await client.updateAgent(createdAgentId, {
+        const repairPayload = {
           agent: {
             agentPlatform: 'vg',
             enableNodes: true,
@@ -1490,22 +1885,31 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
             vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
             vg_systemPrompt: systemPromptResolved,
             vg_instructions: systemPromptResolved,
-            nodes: [{ name: 'Start', instructions: systemPromptResolved }],
+            nodes: normalizeTemplateAgentNodesForCreate([buildTemplateStartNode(systemPromptResolved)]) as any,
             voiceConfig: resolvedVoice as any,
             lang: defaultLanguageResolved,
             roundedImageURL: imageResolved,
             customThemeJSONString: buildCustomThemeJSONString(primaryColorResolved, themeType),
           },
-        });
+        };
+        repairResult = await client.updateAgent(createdAgentId, repairPayload);
       } catch (error) {
-        return normalizeToolError(error, stage, {
-          tool: 'create_agent_from_template',
-          workspaceId: resolvedWorkspaceId,
-          agentId: createdAgentId,
-          observedAgentPlatform: currentPlatform ?? null,
-          constructiveFeedback:
-            'The API created the agent as non-vg. MCP tried to repair it with update_agent and that request failed.',
-        });
+        return {
+          success: true,
+          message:
+            'create_agent_from_template created the agent, but agentPlatform repair failed during post-create checks.',
+          data: {
+            stage: 'created_but_repair_failed',
+            tool: 'create_agent_from_template',
+            workspaceId: resolvedWorkspaceId,
+            agentId: createdAgentId,
+            observedAgentPlatform: currentPlatform ?? null,
+            createResponse: result,
+            warning:
+              'Agent already exists. Do NOT retry create. Use update_agent on this agentId to repair fields.',
+            postCreateError: normalizeErrorDetails(error),
+          },
+        };
       }
 
       platformRepair = repairResult;
@@ -1515,23 +1919,33 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
       try {
         verifyResult = await client.getAgent(createdAgentId);
       } catch (error) {
-        return normalizeToolError(error, stage, {
-          tool: 'create_agent_from_template',
-          workspaceId: resolvedWorkspaceId,
-          agentId: createdAgentId,
-          repairResponse: repairResult,
-        });
+        return {
+          success: true,
+          message:
+            'create_agent_from_template created the agent, but post-repair verification get_agent failed.',
+          data: {
+            stage: 'created_repaired_but_verify_failed',
+            tool: 'create_agent_from_template',
+            workspaceId: resolvedWorkspaceId,
+            agentId: createdAgentId,
+            createResponse: result,
+            repairResponse: repairResult,
+            warning:
+              'Agent already exists. Do NOT retry create. Re-run get_agent for this agentId and repair via update_agent if needed.',
+            postCreateError: normalizeErrorDetails(error),
+          },
+        };
       }
 
       fullAgent = (verifyResult as any)?.data ?? verifyResult;
 
       if (fullAgent?.agentPlatform !== 'vg') {
         return {
-          success: false,
+          success: true,
           message:
-            'create_agent_from_template created an agent, but the upstream API still reports agentPlatform != "vg" after repair.',
+            'create_agent_from_template created an agent, but upstream still reports agentPlatform != "vg" after repair.',
           data: {
-            stage,
+            stage: 'created_but_platform_not_vg_after_repair',
             tool: 'create_agent_from_template',
             workspaceId: resolvedWorkspaceId,
             agentId: createdAgentId,
@@ -1539,8 +1953,8 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
             createResponse: result,
             repairResponse: repairResult,
             agent: fullAgent,
-            constructiveFeedback:
-              'Do not retry this same payload repeatedly. The upstream API is overriding platform selection. Escalate with the returned create/repair responses.',
+            warning:
+              'Agent already exists. Do NOT retry create. Escalate using this agentId and included create/repair responses.',
           },
         };
       }
@@ -1696,7 +2110,11 @@ const tools: Tool[] = [
           format: 'uri',
           description: 'Backward-compatible alias for widgetImageUrl.',
         },
-        defaultLanguage: { type: 'string', description: 'Default language mode (default: multilingual).' },
+        defaultLanguage: {
+          type: 'string',
+          description:
+            'Default language for the agent. Must be a single language code/name (never "multilingual"). Default: "en".',
+        },
         language: { type: 'string', description: 'Backward-compatible alias for defaultLanguage.' },
         proactiveMessage: { type: 'string', description: 'Widget greeting bubble' },
         sourceUrl: {
@@ -1721,6 +2139,11 @@ const tools: Tool[] = [
         createKbUrlDoc: {
           type: 'boolean',
           description: 'If true with sourceUrl, attach URL KB after create (errors are non-fatal).',
+        },
+        requestId: {
+          type: 'string',
+          description:
+            'Optional idempotency key. Reusing the same requestId returns the already-created agent instead of creating a duplicate.',
         },
         branding: { type: 'string' },
         chatBgURL: { type: 'string', format: 'uri' },
