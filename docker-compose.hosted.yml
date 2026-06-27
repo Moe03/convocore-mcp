@@ -1,0 +1,28 @@
+# Hosted Streamable HTTP MCP (no stdio — for cloud / load balancers)
+# Usage: docker compose -f docker-compose.hosted.yml up --build
+
+services:
+  convocore-mcp-hosted:
+    build:
+      context: .
+      dockerfile: Dockerfile.hosted
+    image: convocore-mcp-hosted:latest
+    container_name: convocore-mcp-hosted
+    ports:
+      - "${PORT:-3009}:3009"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3009
+      - MCP_HTTP_PATH=/mcp
+      - CONVOCORE_API_REGION=${CONVOCORE_API_REGION:-eu-gcp}
+      # Optional defaults for tools that resolve workspace without per-client header context:
+      # - CONVOCORE_WORKSPACE_ID=${CONVOCORE_WORKSPACE_ID}
+      # - CONVOCORE_HOSTED_ALLOWED_HOSTS=mcp.convocore.ai
+      # - CONVOCORE_HOSTED_DNS_PROTECTION=true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3009/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

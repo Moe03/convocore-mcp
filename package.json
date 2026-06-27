@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "convocore-mcp": "dist/index.js"
+    "convocore-mcp": "dist/index.js",
+    "convocore-mcp-hosted": "dist/hosted.js"
   },
   "files": [
     "dist",
@@ -16,7 +17,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc && shx chmod +x dist/index.js",
+    "build": "tsc && shx chmod +x dist/index.js dist/hosted.js",
     "dev": "tsc --watch",
     "test": "pnpm run build && node --test test/*.test.mjs",
     "prepublishOnly": "pnpm run build",

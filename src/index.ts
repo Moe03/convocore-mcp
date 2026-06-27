@@ -19,6 +19,13 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
 import { ConvoCoreApiRequestError, ConvoCoreClient } from './convocore-client.js';
+import {
+  getActiveClient,
+  getActiveConfig,
+  initDefaultRequestContext,
+} from './request-context.js';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
 import {
@@ -33,9 +40,11 @@ import { handleAutoGenPallet } from './agent-theme-palette.js';
 
 const execAsync = promisify(exec);
 
-// Initialize configuration and client
-const config = getConfig();
-const client = new ConvoCoreClient(config);
+// Initialize stdio/default API client when WORKSPACE_SECRET is set (stdio / optional hosted fallback).
+if (process.env.WORKSPACE_SECRET) {
+  const defaultConfig = getConfig();
+  initDefaultRequestContext(new ConvoCoreClient(defaultConfig), defaultConfig);
+}
 const templateIdempotencyStore = new TemplateIdempotencyStore();
 
 // Define tool schemas
@@ -1107,7 +1116,7 @@ function getAgentId(agent: any): string | null {
 }
 
 async function findExistingAgentByExactTitle(title: string): Promise<any | null> {
-  const listResult = await client.listAgents({ limit: 500 });
+  const listResult = await getActiveClient().listAgents({ limit: 500 });
   const agents = extractAgentsFromListResult(listResult);
   const matches = agents.filter(
     (agent: any) => typeof agent?.title === 'string' && agent.title.trim() === title
@@ -1123,15 +1132,15 @@ async function findExistingAgentByExactTitle(title: string): Promise<any | null>
 }
 
 async function resolveWorkspaceId(): Promise<string> {
-  if (config.workspaceId && config.workspaceId.trim().length > 0) {
-    return config.workspaceId.trim();
+  if (getActiveConfig().workspaceId && getActiveConfig().workspaceId!.trim().length > 0) {
+    return getActiveConfig().workspaceId!.trim();
   }
 
   if (autoResolvedWorkspaceCache) {
     return autoResolvedWorkspaceCache;
   }
 
-  const listResult = await client.listAgents({ limit: 1 });
+  const listResult = await getActiveClient().listAgents({ limit: 1 });
   const agents = extractAgentsFromListResult(listResult);
   const ownerCandidate = agents.find(
     (agent: any) =>
@@ -1593,7 +1602,7 @@ async function resolveExistingTemplateAgentByIdempotencyKey(
   if (!existingAgentId) return null;
 
   try {
-    const existing = await client.getAgent(existingAgentId);
+    const existing = await getActiveClient().getAgent(existingAgentId);
     const agent = (existing as any)?.data ?? existing;
     return { agentId: existingAgentId, agent };
   } catch {
@@ -1604,8 +1613,8 @@ async function resolveExistingTemplateAgentByIdempotencyKey(
 
 async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromTemplateSchema>) {
   const idempotencyKey = computeTemplateIdempotencyKey(args as Record<string, unknown>, {
-    baseUrl: config.baseUrl,
-    workspaceSecret: config.workspaceSecret,
+    baseUrl: getActiveConfig().baseUrl,
+    workspaceSecret: getActiveConfig().workspaceSecret,
   });
 
   return runTemplateIdempotent(idempotencyKey, async () => {
@@ -1677,7 +1686,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     stage = 'scrape_url';
     let scrapeResult: any;
     try {
-      scrapeResult = await client.scrapeUrl(resolvedWorkspaceId, sourceUrl);
+      scrapeResult = await getActiveClient().scrapeUrl(resolvedWorkspaceId, sourceUrl);
     } catch (error) {
       return normalizeToolError(error, stage, {
         tool: 'create_agent_from_template',
@@ -1723,7 +1732,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
       );
       let fullExisting: any = null;
       try {
-        const fetched = await client.getAgent(existingId);
+        const fetched = await getActiveClient().getAgent(existingId);
         fullExisting = (fetched as any)?.data ?? fetched;
       } catch {
         fullExisting = existingByTitle;
@@ -1830,7 +1839,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   stage = 'create_agent';
   let result: any;
   try {
-    result = await client.createAgent(payload as any);
+    result = await getActiveClient().createAgent(payload as any);
   } catch (error) {
     return normalizeToolError(error, stage, {
       tool: 'create_agent_from_template',
@@ -1852,7 +1861,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     stage = 'get_agent';
     let got: any;
     try {
-      got = await client.getAgent(createdAgentId);
+      got = await getActiveClient().getAgent(createdAgentId);
     } catch (error) {
       return {
         success: true,
@@ -1892,7 +1901,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
             customThemeJSONString: buildCustomThemeJSONString(primaryColorResolved, themeType),
           },
         };
-        repairResult = await client.updateAgent(createdAgentId, repairPayload);
+        repairResult = await getActiveClient().updateAgent(createdAgentId, repairPayload);
       } catch (error) {
         return {
           success: true,
@@ -1917,7 +1926,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
       stage = 'verify_agent_platform';
       let verifyResult: any;
       try {
-        verifyResult = await client.getAgent(createdAgentId);
+        verifyResult = await getActiveClient().getAgent(createdAgentId);
       } catch (error) {
         return {
           success: true,
@@ -1965,7 +1974,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   if (createKbUrlDoc && createdAgentId && sourceUrl) {
     const domainLabel = toDomainLabel(sourceUrl);
     try {
-      kbImportResult = await client.createKBDoc(createdAgentId, {
+      kbImportResult = await getActiveClient().createKBDoc(createdAgentId, {
         name: `${domainLabel} Website`,
         sourceType: 'url',
         urls: [sourceUrl],
@@ -3481,7 +3490,8 @@ const tools: Tool[] = [
   },
 ];
 
-// Create MCP server
+// Create MCP server (shared by stdio + hosted transports)
+export function createMcpServer(): Server {
 const server = new Server(
   {
     name: 'convocore-mcp',
@@ -3543,7 +3553,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   let currentCSS: string | undefined;
   if (agentId) {
     try {
-      currentCSS = await client.getAgentCustomCSS(agentId);
+      currentCSS = await getActiveClient().getAgentCustomCSS(agentId);
     } catch {
       currentCSS = undefined;
     }
@@ -3593,7 +3603,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         };
 
-        const result = await client.createAgent(payload);
+        const result = await getActiveClient().createAgent(payload);
         return {
           content: [
             {
@@ -3649,7 +3659,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_agent': {
         const validated = GetAgentSchema.parse(args);
-        const result = await client.getAgent(validated.agentId);
+        const result = await getActiveClient().getAgent(validated.agentId);
         return {
           content: [
             {
@@ -3671,7 +3681,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         };
 
-        const result = await client.updateAgent(agentId, payload);
+        const result = await getActiveClient().updateAgent(agentId, payload);
         return {
           content: [
             {
@@ -3684,7 +3694,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'delete_agent': {
         const validated = DeleteAgentSchema.parse(args);
-        const result = await client.deleteAgent(validated.agentId);
+        const result = await getActiveClient().deleteAgent(validated.agentId);
         return {
           content: [
             {
@@ -3697,7 +3707,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_agents': {
         const validated = ListAgentsSchema.parse(args);
-        const result = await client.listAgents(
+        const result = await getActiveClient().listAgents(
           validated.limit != null ? { limit: validated.limit } : undefined
         );
         return {
@@ -3713,7 +3723,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'search_agents': {
         const validated = SearchAgentsSchema.parse(args);
         const resolvedWorkspaceId = await resolveWorkspaceId();
-        const result = await client.searchAgents(
+        const result = await getActiveClient().searchAgents(
           resolvedWorkspaceId,
           validated.search,
           validated.page,
@@ -3733,7 +3743,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'export_agent': {
         const validated = ExportAgentSchema.parse(args);
-        const result = await client.exportAgentTemplate(validated.agentId);
+        const result = await getActiveClient().exportAgentTemplate(validated.agentId);
         return {
           content: [
             {
@@ -3746,7 +3756,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'import_agent': {
         const validated = ImportAgentSchema.parse(args);
-        const result = await client.importAgentTemplate(
+        const result = await getActiveClient().importAgentTemplate(
           validated.agentTemplate,
           validated.agentName,
           validated.fromAgentId
@@ -3763,7 +3773,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_agent_usage': {
         const validated = AgentUsageSchema.parse(args);
-        const result = await client.getAgentUsage(
+        const result = await getActiveClient().getAgentUsage(
           validated.agentId,
           validated.range
         );
@@ -3781,7 +3791,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_conversations': {
         const validated = ListConversationsSchema.parse(args);
-        const result = await client.listConversations(
+        const result = await getActiveClient().listConversations(
           validated.agentId,
           validated.page,
           validated.limit
@@ -3798,7 +3808,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'create_conversation': {
         const validated = CreateConversationSchema.parse(args);
-        const result = await client.createConversation(
+        const result = await getActiveClient().createConversation(
           validated.agentId,
           validated.conversation
         );
@@ -3814,7 +3824,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_conversation': {
         const validated = GetConversationSchema.parse(args);
-        const result = await client.getConversation(
+        const result = await getActiveClient().getConversation(
           validated.agentId,
           validated.convoId
         );
@@ -3830,7 +3840,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'update_conversation': {
         const validated = UpdateConversationSchema.parse(args);
-        const result = await client.updateConversation(
+        const result = await getActiveClient().updateConversation(
           validated.agentId,
           validated.convoId,
           validated.conversation
@@ -3848,7 +3858,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'update_conversation_messages': {
         const validated = UpdateConversationMessagesSchema.parse(args);
         const { agentId, convoId, confirmReplace: _confirmReplace, ...payload } = validated;
-        const result = await client.updateConversationMessages(agentId, convoId, payload);
+        const result = await getActiveClient().updateConversationMessages(agentId, convoId, payload);
         return {
           content: [
             {
@@ -3861,7 +3871,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'delete_conversation': {
         const validated = DeleteConversationSchema.parse(args);
-        const result = await client.deleteConversation(
+        const result = await getActiveClient().deleteConversation(
           validated.agentId,
           validated.convoId
         );
@@ -3877,7 +3887,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'export_all_conversations': {
         const validated = ExportAllConversationsSchema.parse(args);
-        const result = await client.exportAllConversations(
+        const result = await getActiveClient().exportAllConversations(
           validated.agentId,
           validated.format
         );
@@ -3893,7 +3903,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'export_conversation': {
         const validated = ExportConversationSchema.parse(args);
-        const result = await client.exportConversation(
+        const result = await getActiveClient().exportConversation(
           validated.agentId,
           validated.convoId,
           validated.format
@@ -3910,7 +3920,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'assign_conversation': {
         const validated = AssignConversationSchema.parse(args);
-        const result = await client.assignConversation(
+        const result = await getActiveClient().assignConversation(
           validated.agentId,
           validated.convoId,
           validated.assignToUserId,
@@ -3931,7 +3941,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'create_kb_doc': {
         const validated = CreateKBDocSchema.parse(args);
         const { agentId, ...kbData } = validated;
-        const result = await client.createKBDoc(agentId, kbData);
+        const result = await getActiveClient().createKBDoc(agentId, kbData);
         return {
           content: [
             {
@@ -3944,7 +3954,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_kb_docs': {
         const validated = ListKBDocsSchema.parse(args);
-        const result = await client.listKBDocs(
+        const result = await getActiveClient().listKBDocs(
           validated.agentId,
           validated.page,
           validated.pageSize
@@ -3961,7 +3971,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_kb_doc': {
         const validated = GetKBDocSchema.parse(args);
-        const result = await client.getKBDoc(validated.agentId, validated.docId);
+        const result = await getActiveClient().getKBDoc(validated.agentId, validated.docId);
         return {
           content: [
             {
@@ -3975,7 +3985,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'update_kb_doc': {
         const validated = UpdateKBDocSchema.parse(args);
         const { agentId, docId, ...kbData } = validated;
-        const result = await client.updateKBDoc(agentId, docId, kbData);
+        const result = await getActiveClient().updateKBDoc(agentId, docId, kbData);
         return {
           content: [
             {
@@ -3988,7 +3998,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'delete_kb_doc': {
         const validated = DeleteKBDocSchema.parse(args);
-        const result = await client.deleteKBDoc(validated.agentId, validated.docId);
+        const result = await getActiveClient().deleteKBDoc(validated.agentId, validated.docId);
         return {
           content: [
             {
@@ -4001,7 +4011,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_kb_stats': {
         const validated = GetKBStatsSchema.parse(args);
-        const result = await client.getKBStats(validated.agentId);
+        const result = await getActiveClient().getKBStats(validated.agentId);
         return {
           content: [
             {
@@ -4017,7 +4027,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'scrape_url': {
         const validated = ScrapeUrlSchema.parse(args);
         const resolvedWorkspaceId = await resolveWorkspaceId();
-        const result = await client.scrapeUrl(resolvedWorkspaceId, validated.url);
+        const result = await getActiveClient().scrapeUrl(resolvedWorkspaceId, validated.url);
         return {
           content: [
             {
@@ -4035,7 +4045,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let currentCSS: string | undefined;
         if (validated.agentId) {
           try {
-            currentCSS = await client.getAgentCustomCSS(validated.agentId);
+            currentCSS = await getActiveClient().getAgentCustomCSS(validated.agentId);
           } catch {
             // Non-fatal — return the base guide if we can't fetch the agent
             currentCSS = undefined;
@@ -4053,7 +4063,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_agent_custom_css': {
         const validated = GetAgentCustomCssSchema.parse(args);
-        const css = await client.getAgentCustomCSS(validated.agentId);
+        const css = await getActiveClient().getAgentCustomCSS(validated.agentId);
         return {
           content: [
             {
@@ -4203,7 +4213,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { extractToText } = await import('./file-readers.js');
         const extracted = await extractToText(src, { pages, sheet, asMarkdown });
         const docName = name || extracted.name || 'Imported document';
-        const kb = await client.createKBDoc(agentId, {
+        const kb = await getActiveClient().createKBDoc(agentId, {
           name: docName,
           sourceType: 'doc',
           content: extracted.text,
@@ -4241,7 +4251,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'update_agent_custom_css': {
         const validated = UpdateAgentCustomCssSchema.parse(args);
-        const result = await client.updateAgentCustomCSS(
+        const result = await getActiveClient().updateAgentCustomCSS(
           validated.agentId,
           validated.customCSS,
         );
@@ -4338,7 +4348,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_voice_providers': {
         ListVoiceProvidersSchema.parse(args ?? {});
-        const result = await client.listVoiceProviders();
+        const result = await getActiveClient().listVoiceProviders();
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4346,7 +4356,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_voice_models': {
         const validated = ListVoiceModelsSchema.parse(args);
-        const result = await client.listVoiceModels(validated.provider);
+        const result = await getActiveClient().listVoiceModels(validated.provider);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4354,7 +4364,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'search_voices': {
         const validated = SearchVoicesSchema.parse(args ?? {});
-        const result = await client.searchVoices(validated);
+        const result = await getActiveClient().searchVoices(validated);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4363,7 +4373,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_provider_voices': {
         const validated = ListProviderVoicesSchema.parse(args);
         const { provider, ...filters } = validated;
-        const result = await client.listProviderVoices(provider, filters);
+        const result = await getActiveClient().listProviderVoices(provider, filters);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4371,7 +4381,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_voice': {
         const validated = GetVoiceSchema.parse(args);
-        const result = await client.getVoice(validated.provider, validated.voiceId);
+        const result = await getActiveClient().getVoice(validated.provider, validated.voiceId);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4379,7 +4389,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'buy_twilio_number': {
         const validated = BuyTwilioNumberSchema.parse(args);
-        const result = await client.buyTwilioNumber(
+        const result = await getActiveClient().buyTwilioNumber(
           validated.number,
           validated.agentId,
           validated.capabilities,
@@ -4391,7 +4401,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'import_twilio_number': {
         const validated = ImportTwilioNumberSchema.parse(args);
-        const result = await client.importTwilioNumber(validated.payload);
+        const result = await getActiveClient().importTwilioNumber(validated.payload);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4399,7 +4409,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'release_twilio_number': {
         const validated = ReleaseTwilioNumberSchema.parse(args);
-        const result = await client.releaseTwilioNumber(validated.payload);
+        const result = await getActiveClient().releaseTwilioNumber(validated.payload);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4407,7 +4417,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'check_twilio_number': {
         const validated = CheckTwilioNumberSchema.parse(args);
-        const result = await client.checkTwilioNumber(validated.payload);
+        const result = await getActiveClient().checkTwilioNumber(validated.payload);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4415,7 +4425,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'sync_sms_twilio_number': {
         const validated = SyncSmsTwilioNumberSchema.parse(args);
-        const result = await client.syncSmsTwilioNumber(validated.payload);
+        const result = await getActiveClient().syncSmsTwilioNumber(validated.payload);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -4427,10 +4437,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const request = {
           ...rest,
-          bucket: bucket ?? client.getDefaultInteractBucket(),
+          bucket: bucket ?? getActiveClient().getDefaultInteractBucket(),
         };
 
-        const result = await client.interactWithAgent(request, { timeoutMs });
+        const result = await getActiveClient().interactWithAgent(request, { timeoutMs });
 
         // When the tested agent emitted UI Engine output, attach an
         // inline guidance block so the calling LLM knows EXACTLY what
@@ -4627,15 +4637,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Start the server
-async function main() {
+  return server;
+}
+
+export { tools };
+
+// Start stdio transport (npx / local node entrypoint — unchanged)
+async function startStdioTransport() {
+  if (!process.env.WORKSPACE_SECRET?.trim()) {
+    throw new Error('WORKSPACE_SECRET environment variable is required');
+  }
+  const defaultConfig = getConfig();
+  initDefaultRequestContext(new ConvoCoreClient(defaultConfig), defaultConfig);
+
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('ConvoCore MCP Server running on stdio');
 }
 
-main().catch((error) => {
-  console.error('Fatal error in main():', error);
-  process.exit(1);
-});
+const isStdioEntry =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isStdioEntry) {
+  startStdioTransport().catch((error) => {
+    console.error('Fatal error in startStdioTransport():', error);
+    process.exit(1);
+  });
+}
 
