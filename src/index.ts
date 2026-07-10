@@ -37,6 +37,13 @@ import { TEMPLATE_START_NODE_DEFAULTS, normalizeTemplateStartNodeArray } from '.
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
+import {
+  MCP_SERVER_INSTRUCTIONS,
+  buildVoiceSdkExample,
+  buildWidgetEmbedSnippet,
+  widgetRegionFromApiRegion,
+  type WidgetEmbedMode,
+} from './mcp-server-instructions.js';
 
 const execAsync = promisify(exec);
 
@@ -571,6 +578,19 @@ const UpdateAgentCustomCssSchema = z.object({
   customCSS: z.string().describe(
     "The full CSS to write to the agent's customCSS field. This REPLACES the existing value entirely — pass the merged CSS, not just a delta. Use an empty string to clear."
   ),
+});
+
+const GetWebsiteEmbedCodeSchema = z.object({
+  agentId: z.string().describe('The ConvoCore agent ID to embed (from get_agent or dashboard URL).'),
+  mode: z
+    .enum(['popup-bottom-right', 'popup-bottom-left', 'full-width', 'modal', 'voice-react'])
+    .optional()
+    .default('popup-bottom-right')
+    .describe(
+      "Embed mode: popup-bottom-right (default chat bubble), popup-bottom-left, full-width (inline div), modal (center overlay), or voice-react (Next.js WebCall example only)."
+    ),
+  containerWidth: z.string().optional().describe('For full-width mode only, e.g. "500px".'),
+  containerHeight: z.string().optional().describe('For full-width mode only, e.g. "500px".'),
 });
 
 const SleepSchema = z.object({
@@ -2865,7 +2885,33 @@ const tools: Tool[] = [
       required: ['url'],
     },
   },
-  // ==================== WIDGET CSS TOOLS ====================
+  // ==================== WEBSITE EMBED + WIDGET CSS TOOLS ====================
+  {
+    name: 'get_website_embed_code',
+    description:
+      "MUST CALL whenever the user asks to deploy/embed/add their agent to a website, get the widget script, iframe code, popup chat bubble, or 'where is the code'. " +
+      "Returns a ready-to-paste HTML snippet with the real agent ID and region filled in (popup, full-width inline, modal, or React voice-only example). " +
+      "Do NOT redirect the user to the dashboard Channels/Deployment tab instead of returning this code. " +
+      "If agentId is unknown, call list_agents first, then call this tool.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The ConvoCore agent ID to embed.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['popup-bottom-right', 'popup-bottom-left', 'full-width', 'modal', 'voice-react'],
+          description:
+            'popup-bottom-right (default bubble), popup-bottom-left, full-width (sized div), modal (center overlay), voice-react (Next.js @tixae-labs/web-sdk).',
+        },
+        containerWidth: { type: 'string', description: 'full-width only, e.g. "500px".' },
+        containerHeight: { type: 'string', description: 'full-width only, e.g. "500px".' },
+      },
+      required: ['agentId'],
+    },
+  },
   {
     name: 'get_widget_css_styling_guide',
     description:
@@ -3502,6 +3548,7 @@ const server = new Server(
       tools: {},
       prompts: {},
     },
+    instructions: MCP_SERVER_INSTRUCTIONS,
   }
 );
 
@@ -3515,6 +3562,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // clients (e.g. Claude Desktop, Cursor) can run it via slash command.
 
 const PROMPTS = [
+  {
+    name: 'integrate_website_widget',
+    description:
+      'Generate a ready-to-paste website embed snippet for a ConvoCore agent. Fetches the agent ID and fills in region automatically. Use when the user asks to add the chatbot to their site, embed the widget, or get the script tag. Modes: popup-bottom-right (default), popup-bottom-left, full-width (inline div), modal, or voice-react (Next.js WebCall example).',
+    arguments: [
+      {
+        name: 'agentId',
+        description: 'The ConvoCore agent ID (from get_agent or the dashboard URL).',
+        required: true,
+      },
+      {
+        name: 'mode',
+        description:
+          "Embed mode: 'popup-bottom-right' | 'popup-bottom-left' | 'full-width' | 'modal' | 'voice-react'. Defaults to popup-bottom-right.",
+        required: false,
+      },
+    ],
+  },
   {
     name: 'generate_widget_css',
     description:
@@ -3542,6 +3607,64 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
 
 server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (name === 'integrate_website_widget') {
+    const agentId = typeof args?.agentId === 'string' ? args.agentId.trim() : '';
+    if (!agentId) {
+      throw new Error('integrate_website_widget requires agentId');
+    }
+
+    const modeRaw = typeof args?.mode === 'string' ? args.mode.trim() : 'popup-bottom-right';
+    const allowedModes: WidgetEmbedMode[] = [
+      'popup-bottom-right',
+      'popup-bottom-left',
+      'full-width',
+      'modal',
+    ];
+    const mode = allowedModes.includes(modeRaw as WidgetEmbedMode)
+      ? (modeRaw as WidgetEmbedMode)
+      : 'popup-bottom-right';
+    const isVoiceReact = modeRaw === 'voice-react';
+
+    await getActiveClient().getAgent(agentId);
+    const region = widgetRegionFromApiRegion(getActiveConfig().apiRegion);
+
+    const widgetSnippet = buildWidgetEmbedSnippet({ agentId, region, mode });
+    const voiceSnippet = buildVoiceSdkExample(agentId, region);
+
+    const text = isVoiceReact
+      ? `# Voice-only embed (React / Next.js)
+
+Install: \`pnpm install @tixae-labs/web-sdk@latest\`
+
+Agent ID: \`${agentId}\` | Region: \`${region}\`
+
+\`\`\`tsx
+${voiceSnippet}
+\`\`\`
+
+Requires WebRTC. For text chat on any website, use the widget script instead (re-run this prompt with mode popup-bottom-right or full-width).`
+      : `# Website widget embed
+
+Agent ID: \`${agentId}\` | Region: \`${region}\` | Mode: \`${mode}\`
+
+Paste before \`</body>\`:
+
+\`\`\`html
+${widgetSnippet}
+\`\`\`
+
+**Modes:** \`popup-bottom-right\` (default bubble), \`popup-bottom-left\`, \`full-width\` (size the container div), \`modal\` (center overlay + \`modalMode: true\`).
+
+**Voice-only in React?** Re-run with \`mode: voice-react\` or use \`@tixae-labs/web-sdk\`.
+
+**Styling?** Call \`get_widget_css_styling_guide\` then \`update_agent_custom_css\` (button colors, header, bubbles, etc.).`;
+
+    return {
+      description: `Website embed for agent ${agentId}`,
+      messages: [{ role: 'user', content: { type: 'text', text } }],
+    };
+  }
 
   if (name !== 'generate_widget_css') {
     throw new Error(`Unknown prompt: ${name}`);
@@ -4039,6 +4162,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // ==================== WIDGET CSS HANDLERS ====================
+
+      case 'get_website_embed_code': {
+        const validated = GetWebsiteEmbedCodeSchema.parse(args);
+        await getActiveClient().getAgent(validated.agentId);
+        const region = widgetRegionFromApiRegion(getActiveConfig().apiRegion);
+        const mode = validated.mode ?? 'popup-bottom-right';
+
+        if (mode === 'voice-react') {
+          const voiceSnippet = buildVoiceSdkExample(validated.agentId, region);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    agentId: validated.agentId,
+                    region,
+                    mode,
+                    install: 'pnpm install @tixae-labs/web-sdk@latest',
+                    note: 'Voice-only React embed. Requires WebRTC. For text chat on any website use popup-bottom-right or full-width instead.',
+                    code: voiceSnippet,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const html = buildWidgetEmbedSnippet({
+          agentId: validated.agentId,
+          region,
+          mode,
+          containerWidth: validated.containerWidth,
+          containerHeight: validated.containerHeight,
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  agentId: validated.agentId,
+                  region,
+                  mode,
+                  instructions: 'Paste before </body> on any website (WordPress, Shopify, Webflow, plain HTML, etc.).',
+                  html,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
 
       case 'get_widget_css_styling_guide': {
         const validated = WidgetCssStylingGuideSchema.parse(args);
