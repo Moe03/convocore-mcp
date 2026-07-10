@@ -5,7 +5,7 @@
 FROM node:20-alpine AS builder
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 # Set working directory
 WORKDIR /app
@@ -27,7 +27,7 @@ RUN pnpm exec tsc
 FROM node:20-alpine
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 # Set working directory
 WORKDIR /app
