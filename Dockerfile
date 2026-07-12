@@ -1,54 +1,51 @@
-# ConvoCore MCP Server - Docker Image
-# Multi-stage build for optimized image size
+# ConvoCore MCP — remote Streamable HTTP (default for Docker / mcp.convocore.ai)
+# Listens on port 3009. Users pass WORKSPACE_SECRET as:
+#   Authorization: Bearer <WORKSPACE_SECRET>
+# Do NOT set WORKSPACE_SECRET in the container — multi-tenant per request.
+#
+# Build: docker build -t convocore-mcp-hosted .
+# Run:   docker run -p 3009:3009 convocore-mcp-hosted
+# Health: curl http://127.0.0.1:3009/health
 
-# Stage 1: Build
 FROM node:20-alpine AS builder
 
-# Install pnpm
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package.json pnpm-lock.yaml ./
-
-# Copy source code and config (needed before install)
 COPY src ./src
 COPY tsconfig.json ./
 
-# Install dependencies (skip prepare script)
 RUN pnpm install --frozen-lockfile --ignore-scripts
-
-# Build TypeScript manually
 RUN pnpm exec tsc
 
-# Stage 2: Production
 FROM node:20-alpine
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+RUN apk add --no-cache wget \
+  && corepack enable \
+  && corepack prepare pnpm@9.15.4 --activate
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files
 COPY package.json pnpm-lock.yaml ./
 
-# Install production dependencies only (skip scripts to avoid prepare)
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 
-# Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Set environment variables (can be overridden at runtime)
 ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3009
+ENV MCP_HTTP_PATH=/mcp
+ENV MCP_TRANSPORT=http
+ENV CONVOCORE_API_REGION=eu-gcp
+ENV CONVOCORE_HOSTED_DNS_PROTECTION=false
 
-# Set the entrypoint
-ENTRYPOINT ["node", "dist/index.js"]
+EXPOSE 3009
 
-# Labels
-LABEL maintainer="moe003"
-LABEL description="ConvoCore MCP Server for AI Agent Management"
-LABEL version="1.0.0"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3009/health || exit 1
 
+# Hosted HTTP — NOT stdio. Never require WORKSPACE_SECRET at boot.
+CMD ["node", "dist/hosted.js"]

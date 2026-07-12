@@ -4822,10 +4822,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 export { tools };
 
-// Start stdio transport (npx / local node entrypoint — unchanged)
+// Start stdio transport ONLY for local npx / `node dist/index.js`.
+// Hosted Docker uses dist/hosted.js — auth is Bearer per request, no WORKSPACE_SECRET at boot.
 async function startStdioTransport() {
   if (!process.env.WORKSPACE_SECRET?.trim()) {
-    throw new Error('WORKSPACE_SECRET environment variable is required');
+    throw new Error(
+      'WORKSPACE_SECRET environment variable is required for stdio/npx mode. ' +
+        'For remote MCP (Docker / mcp.convocore.ai), run: node dist/hosted.js — ' +
+        'clients send Authorization: Bearer <WORKSPACE_SECRET> on each request.'
+    );
   }
   const defaultConfig = getConfig();
   initDefaultRequestContext(new ConvoCoreClient(defaultConfig), defaultConfig);
@@ -4836,9 +4841,13 @@ async function startStdioTransport() {
   console.error('ConvoCore MCP Server running on stdio');
 }
 
-const isStdioEntry =
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const entryArg = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const thisFile = fileURLToPath(import.meta.url);
+const isHostedTransport =
+  process.env.MCP_TRANSPORT === 'http' ||
+  entryArg.endsWith(`${path.sep}hosted.js`) ||
+  entryArg.endsWith(`${path.sep}hosted.ts`);
+const isStdioEntry = Boolean(entryArg) && entryArg === thisFile && !isHostedTransport;
 
 if (isStdioEntry) {
   startStdioTransport().catch((error) => {

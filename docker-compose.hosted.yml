@@ -15,6 +15,7 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=3009
+      - MCP_TRANSPORT=http
       - MCP_HTTP_PATH=/mcp
       - CONVOCORE_API_REGION=${CONVOCORE_API_REGION:-eu-gcp}
       - CONVOCORE_HOSTED_ALLOWED_HOSTS=${CONVOCORE_HOSTED_ALLOWED_HOSTS:-}

@@ -18,6 +18,8 @@
   },
   "scripts": {
     "build": "tsc && shx chmod +x dist/index.js dist/hosted.js",
+    "start": "node dist/hosted.js",
+    "start:stdio": "node dist/index.js",
     "dev": "tsc --watch",
     "test": "pnpm run build && node --test test/*.test.mjs",
     "smoke:hosted": "node scripts/smoke-hosted.mjs",
