@@ -20,6 +20,7 @@
     "build": "tsc && shx chmod +x dist/index.js dist/hosted.js",
     "dev": "tsc --watch",
     "test": "pnpm run build && node --test test/*.test.mjs",
+    "smoke:hosted": "node scripts/smoke-hosted.mjs",
     "prepublishOnly": "pnpm run build",
     "publish:npm": "node scripts/publish-npm.mjs"
   },

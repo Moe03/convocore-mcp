@@ -1,6 +1,8 @@
 # ConvoCore MCP — hosted Streamable HTTP server
 # Build: docker build -f Dockerfile.hosted -t convocore-mcp-hosted .
 # Run:   docker run -p 3009:3009 convocore-mcp-hosted
+# Health: curl http://127.0.0.1:3009/health
+# MCP:    https://mcp.convocore.ai/mcp  (after you point DNS)
 
 FROM node:20-alpine AS builder
 
@@ -17,7 +19,9 @@ RUN pnpm exec tsc
 
 FROM node:20-alpine
 
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+RUN apk add --no-cache wget \
+  && corepack enable \
+  && corepack prepare pnpm@9.15.4 --activate
 
 WORKDIR /app
 
@@ -31,10 +35,16 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3009
 ENV MCP_HTTP_PATH=/mcp
+ENV CONVOCORE_API_REGION=eu-gcp
+# Leave DNS protection off by default so local docker/curl works (Host: localhost).
+# In production set:
+#   CONVOCORE_HOSTED_ALLOWED_HOSTS=mcp.convocore.ai
+#   CONVOCORE_HOSTED_DNS_PROTECTION=true
+ENV CONVOCORE_HOSTED_DNS_PROTECTION=false
 
 EXPOSE 3009
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3009/health || exit 1
 
 CMD ["node", "dist/hosted.js"]

@@ -1,5 +1,7 @@
-# Hosted Streamable HTTP MCP (no stdio — for cloud / load balancers)
-# Usage: docker compose -f docker-compose.hosted.yml up --build
+# Hosted Streamable HTTP MCP — always on port 3009 inside the container.
+# Usage:
+#   docker compose -f docker-compose.hosted.yml up --build -d
+#   curl http://127.0.0.1:3009/health
 
 services:
   convocore-mcp-hosted:
@@ -9,20 +11,19 @@ services:
     image: convocore-mcp-hosted:latest
     container_name: convocore-mcp-hosted
     ports:
-      - "${PORT:-3009}:3009"
+      - "3009:3009"
     environment:
       - HOST=0.0.0.0
       - PORT=3009
       - MCP_HTTP_PATH=/mcp
       - CONVOCORE_API_REGION=${CONVOCORE_API_REGION:-eu-gcp}
-      # Optional defaults for tools that resolve workspace without per-client header context:
-      # - CONVOCORE_WORKSPACE_ID=${CONVOCORE_WORKSPACE_ID}
-      # - CONVOCORE_HOSTED_ALLOWED_HOSTS=mcp.convocore.ai
-      # - CONVOCORE_HOSTED_DNS_PROTECTION=true
+      - CONVOCORE_HOSTED_ALLOWED_HOSTS=${CONVOCORE_HOSTED_ALLOWED_HOSTS:-}
+      - CONVOCORE_HOSTED_DNS_PROTECTION=${CONVOCORE_HOSTED_DNS_PROTECTION:-false}
+      - CONVOCORE_HOSTED_SESSION_IDLE_MS=${CONVOCORE_HOSTED_SESSION_IDLE_MS:-1800000}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3009/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
