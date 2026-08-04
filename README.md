@@ -258,12 +258,16 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `export_agent` | GET | `/agents/{agentId}/export-template` |
 | `import_agent` | POST | `/agents/import-template` |
 | `get_agent_usage` | POST | `/agents/{agentId}/usage` body `{ range }` |
-| `list_conversations` | GET | `/agents/{agentId}/convos?page&limit` |
+| `list_conversations` | GET | `/agents/{agentId}/convos?limit&cursor` (cursor pagination; page>1 without cursor rejected) |
+| `get_conversations_bulk` | GET×N | Fan-out `GET /agents/{agentId}/convos/{convoId}` (max 50 IDs, concurrency pool) |
+| `query_conversations` | MCP | Cursor list + bulk filter (not server SQL; `maxScan` bound) |
+| `get_agent_usage_bulk` | POST×N | Fan-out `POST /agents/{agentId}/usage` (max 20 agents) |
+| `get_kb_docs_bulk` | GET×N | Fan-out `GET /agents/{agentId}/kb/{docId}` (max 30 docs) |
 | `create_conversation` | POST | `/agents/{agentId}/convos` body `{ conversation }` |
 | `get_conversation` | GET | `/agents/{agentId}/convos/{convoId}` |
 | `update_conversation` | PATCH | `/agents/{agentId}/convos/{convoId}` body `{ conversation }` |
 | `delete_conversation` | DELETE | `/agents/{agentId}/convos/{convoId}` |
-| `export_all_conversations` | GET | `/agents/{agentId}/convos/export?format=` |
+| `export_all_conversations` | GET | `/agents/{agentId}/convos/export?format=&limit=&cursor=&…` (requires paid workspace / `hasEverPaid`) |
 | `export_conversation` | GET | `/agents/{agentId}/convos/{convoId}/export?format=` |
 | `assign_conversation` | POST | `/agents/{agentId}/convos/{convoId}/assign` body `{ assignToUserId, delegatedBy? }` |
 | `create_kb_doc` | POST | `/agents/{agentId}/kb` body: KB fields |
@@ -313,7 +317,15 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Conversation tools
 
-**`list_conversations`** — Required: `agentId`. Optional: `page` (default 1), `limit` (default 20).
+**`list_conversations`** — Required: `agentId`. Optional: `limit` (default 20, **max 20**), `cursor` (from previous `nextCursor`). Response: `data`, `hasMore`, `nextCursor`, `limit`. For page 2+ pass `cursor` — do **not** bump `page` alone (API rejects `page>1` without cursor). List reads the Postgres mirror; `summary` / `capturedVariables` are often missing on list rows.
+
+**`get_conversations_bulk`** — Required: `agentId`, `convoIds` (1–50). Fan-out GETs; returns lean `{ ID, summary, ts, capturedVariables, userName, origin }` plus `failed[]`. Chunk larger audits.
+
+**`query_conversations`** — Required: `agentId`. Optional filters: `origin`, `tsFrom`/`tsTo`, `capturedVariableExists`, `capturedVariableEquals`, `summaryContains`, `hasUserName`, plus `limit` / `maxScan`. MCP-side scan (not SQL).
+
+**`get_agent_usage_bulk`** — Required: `agentIds` (1–20). Optional shared `range`.
+
+**`get_kb_docs_bulk`** — Required: `agentId`, `docIds` (1–30). Optional `includeContent` (default false).
 
 **`create_conversation`** — Required: `agentId`, `conversation`. The API expects at least a **`ts`** (timestamp) in the conversation object; you may add `userName`, `userEmail`, etc. per your ConvoCore setup.
 
@@ -323,9 +335,9 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`delete_conversation`** — Required: `agentId`, `convoId`.
 
-**`export_all_conversations`** — Required: `agentId`. Optional: `format` — `json` (default) or `csv`.
+**`export_all_conversations`** — Required: `agentId`. Optional: `format` (`json`|`csv`), `limit`, `sort`, `fromTs`, `toTs`, `cursor`, `convoIds`. Requires a **paid workspace** (`hasEverPaid === true`); billed against monthly export quota. Cursor pagination via `nextCursor` / `hasMore`.
 
-**`export_conversation`** — Required: `agentId`, `convoId`. Optional: `format` — `json` or `csv`.
+**`export_conversation`** — Required: `agentId`, `convoId`. Optional: `format` — `json` or `csv`. Requires a **paid workspace** (`hasEverPaid === true`).
 
 **`assign_conversation`** — Required: `agentId`, `convoId`, `assignToUserId`. Optional: `delegatedBy`.
 

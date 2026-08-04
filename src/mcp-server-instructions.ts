@@ -209,9 +209,16 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ---
 
+## Conversation audits (bulk)
+
+- \`list_conversations\` is **cursor-paginated** (max 20/page). For page 2+ pass \`cursor\` from \`nextCursor\` — never bump \`page\` alone.
+- List rows are thin (often no \`summary\` / \`capturedVariables\`). For audits: collect IDs → \`get_conversations_bulk\` (max 50 IDs/call) → analyze \`summary\` / vars.
+- \`query_conversations\` is an MCP-side filter (list scan + bulk get), not SQL. Bound with \`maxScan\`. Prefer \`get_conversations_bulk\` when you already have IDs.
+- Usage across many agents: \`get_agent_usage_bulk\` (max 20). KB audits: \`get_kb_docs_bulk\` (max 30).
+
 ## Knowledge base & testing
 
-- KB: \`create_kb_doc\`, \`list_kb_docs\`, \`update_kb_doc\`; content may appear under \`chunks\` in \`get_kb_doc\`.
+- KB: \`create_kb_doc\`, \`list_kb_docs\`, \`update_kb_doc\`; content may appear under \`chunks\` in \`get_kb_doc\`. Prefer \`get_kb_docs_bulk\` for many docs.
 - Test agent behavior: \`interact_with_agent\` with \`isTest: true\`; reuse \`convoId\` for multi-turn tests.
 - Scrape a site first: \`scrape_url\` → then \`create_agent_from_template\` or KB URL doc.
 
@@ -220,6 +227,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 ## Quick decision tree
 
 - **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` → then embed tool) → paste \`html\` in reply.
+- **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.
 - **"Change widget colors / button look"** → CSS tools (\`get_widget_css_styling_guide\` → \`update_agent_custom_css\`).
 - **"Change what the agent says"** → \`update_agent\` → \`nodes[0].instructions\` or \`proactiveMessage\`.

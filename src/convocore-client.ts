@@ -21,6 +21,27 @@ import {
   InteractChunkMessage,
   UiEngineMessageSummary,
 } from './types.js';
+import { mapWithConcurrency } from './parallel.js';
+
+/** Lean conversation projection for audit / bulk tools. */
+export type ConversationBulkRow = {
+  ID: string;
+  summary: string | null;
+  ts: number | null;
+  capturedVariables: Record<string, unknown> | null;
+  userName: string | null;
+  origin: unknown;
+};
+
+export type QueryConversationsFilters = {
+  origin?: string;
+  tsFrom?: number;
+  tsTo?: number;
+  capturedVariableExists?: string;
+  capturedVariableEquals?: { key: string; value: string };
+  summaryContains?: string;
+  hasUserName?: boolean;
+};
 
 export class ConvoCoreApiRequestError extends Error {
   status?: number;
@@ -332,20 +353,53 @@ export class ConvoCoreClient {
     });
   }
 
+  /**
+   * Fan-out usage for many agents (max 20 — enforced by schema).
+   */
+  async getAgentUsageBulk(
+    agentIds: string[],
+    range?: { from: string; to: string }
+  ): Promise<{
+    requested: number;
+    returned: number;
+    succeeded: Array<{ agentId: string; usage: any }>;
+    failed: Array<{ id: string; error: string }>;
+  }> {
+    const unique = [...new Set(agentIds.map((id) => id.trim()).filter(Boolean))];
+    const batch = await mapWithConcurrency(unique, async (agentId) => {
+      const usage = await this.getAgentUsage(agentId, range);
+      return { agentId, usage };
+    });
+    return {
+      requested: unique.length,
+      returned: batch.succeeded.length,
+      succeeded: batch.succeeded,
+      failed: batch.failed,
+    };
+  }
+
   // ==================== CONVERSATION METHODS ====================
 
   /**
-   * List all conversations for an agent
+   * List conversations for an agent (cursor pagination).
+   * API rejects page>1 without cursor — when cursor is set, page is omitted.
    */
   async listConversations(
     agentId: string,
     page: number = 1,
-    limit: number = 20
+    limit: number = 20,
+    cursor?: string
   ): Promise<any> {
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 20);
     const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
+      limit: String(cappedLimit),
     });
+    if (cursor) {
+      params.set('cursor', cursor);
+    } else {
+      // First page only without cursor
+      params.set('page', String(page > 1 ? 1 : page));
+    }
     return this.request<any>(`/agents/${agentId}/convos?${params.toString()}`);
   }
 
@@ -364,6 +418,186 @@ export class ConvoCoreClient {
    */
   async getConversation(agentId: string, convoId: string): Promise<any> {
     return this.request<any>(`/agents/${agentId}/convos/${convoId}`);
+  }
+
+  /** Unwrap API envelope `{ data }` when present. */
+  private unwrapData(result: any): any {
+    if (result && typeof result === 'object' && 'data' in result && result.data != null) {
+      return result.data;
+    }
+    return result;
+  }
+
+  projectConversationBulkRow(raw: any): ConversationBulkRow {
+    const doc = this.unwrapData(raw) ?? {};
+    const id =
+      (typeof doc.ID === 'string' && doc.ID) ||
+      (typeof doc.id === 'string' && doc.id) ||
+      '';
+    const captured =
+      doc.capturedVariables && typeof doc.capturedVariables === 'object'
+        ? (doc.capturedVariables as Record<string, unknown>)
+        : null;
+    return {
+      ID: id,
+      summary: typeof doc.summary === 'string' ? doc.summary : null,
+      ts: typeof doc.ts === 'number' ? doc.ts : null,
+      capturedVariables: captured,
+      userName: typeof doc.userName === 'string' ? doc.userName : null,
+      origin: doc.origin ?? null,
+    };
+  }
+
+  /**
+   * Fan-out GET /convos/{id} for many IDs. Max 50 per call (enforced by caller/schema).
+   */
+  async getConversationsBulk(
+    agentId: string,
+    convoIds: string[]
+  ): Promise<{
+    agentId: string;
+    requested: number;
+    returned: number;
+    failed: Array<{ id: string; error: string }>;
+    data: ConversationBulkRow[];
+  }> {
+    const unique = [...new Set(convoIds.map((id) => id.trim()).filter(Boolean))];
+    const batch = await mapWithConcurrency(unique, async (convoId) => {
+      const raw = await this.getConversation(agentId, convoId);
+      return this.projectConversationBulkRow(raw);
+    });
+
+    return {
+      agentId,
+      requested: unique.length,
+      returned: batch.succeeded.length,
+      failed: batch.failed,
+      data: batch.succeeded,
+    };
+  }
+
+  /**
+   * MCP-side filter: cursor-page list, then bulk-get rows that need summary/vars.
+   * Not a server-side analytics query — bounded by maxScan.
+   */
+  async queryConversations(
+    agentId: string,
+    options: {
+      limit?: number;
+      maxScan?: number;
+      filters?: QueryConversationsFilters;
+    } = {}
+  ): Promise<{
+    agentId: string;
+    matched: number;
+    scanned: number;
+    hasMoreUnscanned: boolean;
+    nextListCursor: string | null;
+    data: ConversationBulkRow[];
+    failed: Array<{ id: string; error: string }>;
+  }> {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+    const maxScan = Math.min(Math.max(options.maxScan ?? 200, 1), 500);
+    const filters = options.filters ?? {};
+    const needsDetail =
+      filters.capturedVariableExists != null ||
+      filters.capturedVariableEquals != null ||
+      (typeof filters.summaryContains === 'string' && filters.summaryContains.length > 0) ||
+      filters.hasUserName != null;
+
+    const listCandidates: any[] = [];
+    let cursor: string | undefined;
+    let hasMore = true;
+    let nextListCursor: string | null = null;
+
+    while (hasMore && listCandidates.length < maxScan) {
+      const pageLimit = Math.min(20, maxScan - listCandidates.length);
+      const page = await this.listConversations(agentId, 1, pageLimit, cursor);
+      const rows: any[] = Array.isArray(page?.data)
+        ? page.data
+        : Array.isArray(page)
+          ? page
+          : [];
+      for (const row of rows) {
+        if (listCandidates.length >= maxScan) break;
+        listCandidates.push(row);
+      }
+      hasMore = Boolean(page?.hasMore);
+      nextListCursor = typeof page?.nextCursor === 'string' ? page.nextCursor : null;
+      if (!hasMore || !nextListCursor) break;
+      cursor = nextListCursor;
+    }
+
+    const cheapFiltered = listCandidates.filter((row) => {
+      if (filters.origin != null) {
+        const origin =
+          typeof row.origin === 'string'
+            ? row.origin
+            : row.origin != null
+              ? String(row.origin)
+              : '';
+        if (origin !== filters.origin) return false;
+      }
+      if (filters.tsFrom != null && typeof row.ts === 'number' && row.ts < filters.tsFrom) {
+        return false;
+      }
+      if (filters.tsTo != null && typeof row.ts === 'number' && row.ts > filters.tsTo) {
+        return false;
+      }
+      return true;
+    });
+
+    const ids = cheapFiltered
+      .map((row) => (typeof row.ID === 'string' ? row.ID : typeof row.id === 'string' ? row.id : ''))
+      .filter(Boolean);
+
+    let detailed: ConversationBulkRow[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    if (needsDetail || filters.hasUserName != null) {
+      // Fetch in chunks of 50
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        const bulk = await this.getConversationsBulk(agentId, chunk);
+        detailed.push(...bulk.data);
+        failed.push(...bulk.failed);
+      }
+    } else {
+      // List-only projection (summary/vars usually missing on PG list)
+      detailed = cheapFiltered.map((row) => this.projectConversationBulkRow(row));
+    }
+
+    const matchedRows = detailed.filter((row) => {
+      if (filters.hasUserName === true && !(row.userName && row.userName.trim())) return false;
+      if (filters.hasUserName === false && row.userName && row.userName.trim()) return false;
+      if (filters.capturedVariableExists) {
+        const vars = row.capturedVariables;
+        if (!vars || !(filters.capturedVariableExists in vars)) return false;
+      }
+      if (filters.capturedVariableEquals) {
+        const { key, value } = filters.capturedVariableEquals;
+        const vars = row.capturedVariables;
+        if (!vars || String(vars[key]) !== value) return false;
+      }
+      if (filters.summaryContains) {
+        const needle = filters.summaryContains.toLowerCase();
+        const hay = (row.summary || '').toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+
+    const hasMoreUnscanned = Boolean(hasMore && listCandidates.length >= maxScan);
+
+    return {
+      agentId,
+      matched: Math.min(matchedRows.length, limit),
+      scanned: listCandidates.length,
+      hasMoreUnscanned,
+      nextListCursor: hasMoreUnscanned ? nextListCursor : null,
+      data: matchedRows.slice(0, limit),
+      failed,
+    };
   }
 
   /**
@@ -411,13 +645,32 @@ export class ConvoCoreClient {
   }
 
   /**
-   * Export all conversations for an agent
+   * Export conversations for an agent (paid workspace / hasEverPaid).
+   * Supports cursor pagination and optional convoIds selected mode.
    */
   async exportAllConversations(
     agentId: string,
-    format: 'json' | 'csv' = 'json'
+    format: 'json' | 'csv' = 'json',
+    options?: {
+      limit?: number;
+      sort?: string;
+      fromTs?: number;
+      toTs?: number;
+      cursor?: string;
+      convoIds?: string[];
+    }
   ): Promise<any> {
     const params = new URLSearchParams({ format });
+    if (options?.limit != null) params.set('limit', String(options.limit));
+    if (options?.sort) params.set('sort', options.sort);
+    if (options?.fromTs != null) params.set('fromTs', String(options.fromTs));
+    if (options?.toTs != null) params.set('toTs', String(options.toTs));
+    if (options?.cursor) params.set('cursor', options.cursor);
+    if (options?.convoIds?.length) {
+      for (const id of options.convoIds) {
+        params.append('convoIds', id);
+      }
+    }
     return this.request<any>(`/agents/${agentId}/convos/export?${params.toString()}`);
   }
 
@@ -482,6 +735,80 @@ export class ConvoCoreClient {
    */
   async getKBDoc(agentId: string, docId: string): Promise<any> {
     return this.request<any>(`/agents/${agentId}/kb/${docId}`);
+  }
+
+  /**
+   * Fan-out KB docs (max 30 — enforced by schema).
+   * By default returns compact metadata without full chunk bodies.
+   */
+  async getKbDocsBulk(
+    agentId: string,
+    docIds: string[],
+    options?: { includeContent?: boolean }
+  ): Promise<{
+    agentId: string;
+    requested: number;
+    returned: number;
+    failed: Array<{ id: string; error: string }>;
+    data: Array<{
+      id: string;
+      name: string | null;
+      tags: string[] | null;
+      sourceType: string | null;
+      chunksPreview?: unknown;
+      content?: unknown;
+      chunks?: unknown;
+    }>;
+  }> {
+    const includeContent = Boolean(options?.includeContent);
+    const unique = [...new Set(docIds.map((id) => id.trim()).filter(Boolean))];
+    const batch = await mapWithConcurrency(unique, async (docId) => {
+      const raw = await this.getKBDoc(agentId, docId);
+      const doc = this.unwrapData(raw) ?? {};
+      const id =
+        (typeof doc.ID === 'string' && doc.ID) ||
+        (typeof doc.id === 'string' && doc.id) ||
+        docId;
+      const tags = Array.isArray(doc.tags) ? doc.tags.map(String) : null;
+      const chunks = Array.isArray(doc.chunks) ? doc.chunks : undefined;
+      const row: {
+        id: string;
+        name: string | null;
+        tags: string[] | null;
+        sourceType: string | null;
+        chunksPreview?: unknown;
+        content?: unknown;
+        chunks?: unknown;
+      } = {
+        id,
+        name: typeof doc.name === 'string' ? doc.name : null,
+        tags,
+        sourceType: typeof doc.sourceType === 'string' ? doc.sourceType : null,
+      };
+      if (includeContent) {
+        if (chunks) row.chunks = chunks;
+        if (doc.content != null) row.content = doc.content;
+      } else if (chunks) {
+        row.chunksPreview = {
+          count: chunks.length,
+          firstChunkPreview:
+            typeof chunks[0]?.content === 'string'
+              ? chunks[0].content.slice(0, 200)
+              : typeof chunks[0] === 'string'
+                ? chunks[0].slice(0, 200)
+                : null,
+        };
+      }
+      return row;
+    });
+
+    return {
+      agentId,
+      requested: unique.length,
+      returned: batch.succeeded.length,
+      failed: batch.failed,
+      data: batch.succeeded,
+    };
   }
 
   /**

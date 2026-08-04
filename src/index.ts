@@ -290,8 +290,29 @@ const AgentUsageSchema = z.object({
 
 const ListConversationsSchema = z.object({
   agentId: z.string().describe('The agent ID to list conversations for'),
-  page: z.number().optional().default(1).describe('Page number'),
-  limit: z.number().optional().default(20).describe('Results per page'),
+  cursor: z
+    .string()
+    .optional()
+    .describe(
+      'Opaque cursor from the previous response `nextCursor`. Pass this to fetch the next page. Do not bump `page` alone — page>1 without cursor is rejected by the API.'
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .default(20)
+    .describe('Results per page (default 20, max 20)'),
+  page: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .default(1)
+    .describe(
+      'Legacy. Only page=1 is valid without cursor. Prefer cursor/nextCursor/hasMore for pagination.'
+    ),
 });
 
 const CreateConversationSchema = z.object({
@@ -443,6 +464,18 @@ const DeleteConversationSchema = z.object({
 const ExportAllConversationsSchema = z.object({
   agentId: z.string().describe('The agent ID to export conversations from'),
   format: z.enum(['json', 'csv']).optional().default('json').describe('Export format'),
+  limit: z.number().int().min(1).optional().describe('Max conversations to export in this page'),
+  sort: z.string().optional().describe('Sort order (API-defined, e.g. newest)'),
+  fromTs: z.number().optional().describe('Unix timestamp lower bound (inclusive)'),
+  toTs: z.number().optional().describe('Unix timestamp upper bound (inclusive)'),
+  cursor: z
+    .string()
+    .optional()
+    .describe('Opaque cursor from previous export response nextCursor for the next page'),
+  convoIds: z
+    .array(z.string())
+    .optional()
+    .describe('If set, export only these conversation IDs (selected mode)'),
 });
 
 const ExportConversationSchema = z.object({
@@ -456,6 +489,86 @@ const AssignConversationSchema = z.object({
   convoId: z.string().describe('The conversation ID'),
   assignToUserId: z.string().describe('User ID to assign conversation to'),
   delegatedBy: z.string().optional().describe('ID of user delegating this chat'),
+});
+
+const GetConversationsBulkSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  convoIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(50)
+    .describe('Conversation IDs to fetch (max 50 per call; chunk larger audits)'),
+});
+
+const QueryConversationsSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .default(50)
+    .describe('Max matches to return (default 50, max 100)'),
+  maxScan: z
+    .number()
+    .int()
+    .min(1)
+    .max(500)
+    .optional()
+    .default(200)
+    .describe('Max conversations to scan via list pages (default 200, max 500)'),
+  origin: z.string().optional().describe('Exact origin match (e.g. web-chat)'),
+  tsFrom: z.number().optional().describe('Unix timestamp lower bound (inclusive)'),
+  tsTo: z.number().optional().describe('Unix timestamp upper bound (inclusive)'),
+  capturedVariableExists: z
+    .string()
+    .optional()
+    .describe('Require this key in capturedVariables'),
+  capturedVariableEquals: z
+    .object({
+      key: z.string(),
+      value: z.string(),
+    })
+    .optional()
+    .describe('Require capturedVariables[key] === value (string compare)'),
+  summaryContains: z
+    .string()
+    .optional()
+    .describe('Case-insensitive substring match on conversation summary'),
+  hasUserName: z
+    .boolean()
+    .optional()
+    .describe('If true, require non-empty userName; if false, require missing/empty'),
+});
+
+const GetAgentUsageBulkSchema = z.object({
+  agentIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(20)
+    .describe('Agent IDs to fetch usage for (max 20)'),
+  range: z
+    .object({
+      from: z.string().describe('Start date (ISO string)'),
+      to: z.string().describe('End date (ISO string)'),
+    })
+    .optional()
+    .describe('Optional date range applied to every agent'),
+});
+
+const GetKbDocsBulkSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  docIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(30)
+    .describe('KB document IDs (max 30 per call)'),
+  includeContent: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('If true, include full chunks/content (can be large). Default false = compact preview.'),
 });
 
 // ==================== KNOWLEDGE BASE SCHEMAS ====================
@@ -2400,7 +2513,12 @@ const tools: Tool[] = [
   // ==================== CONVERSATION TOOLS ====================
   {
     name: 'list_conversations',
-    description: 'List all conversations for an agent',
+    description:
+      'List conversations for an agent (newest first) from the Postgres conversation mirror. ' +
+      'Pagination is cursor-based: response includes hasMore + nextCursor. ' +
+      'To fetch the next page, call again with cursor=<previous nextCursor>. ' +
+      'Do NOT bump page alone — page>1 without cursor is rejected. Max limit=20. ' +
+      'List rows may omit Firestore-only fields such as title/lastMessage.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2408,13 +2526,19 @@ const tools: Tool[] = [
           type: 'string',
           description: 'The agent ID to list conversations for',
         },
-        page: {
-          type: 'number',
-          description: 'Page number (default: 1)',
+        cursor: {
+          type: 'string',
+          description:
+            'Opaque cursor from previous response nextCursor. Required to paginate past the first page.',
         },
         limit: {
           type: 'number',
-          description: 'Results per page (default: 20)',
+          description: 'Results per page (default: 20, max: 20)',
+        },
+        page: {
+          type: 'number',
+          description:
+            'Legacy. Only page=1 without cursor. Prefer cursor / nextCursor / hasMore.',
         },
       },
       required: ['agentId'],
@@ -2628,7 +2752,9 @@ const tools: Tool[] = [
   },
   {
     name: 'export_all_conversations',
-    description: 'Export all conversations for an agent',
+    description:
+      'Export conversations for an agent (Postgres mirror). Requires a paid workspace (hasEverPaid === true); billed against monthly export quota. ' +
+      'Supports cursor pagination via cursor/nextCursor/hasMore, or selected mode via convoIds. Formats: json|csv.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2641,13 +2767,39 @@ const tools: Tool[] = [
           enum: ['json', 'csv'],
           description: 'Export format (default: json)',
         },
+        limit: {
+          type: 'number',
+          description: 'Max conversations in this export page',
+        },
+        sort: {
+          type: 'string',
+          description: 'Sort order (API-defined)',
+        },
+        fromTs: {
+          type: 'number',
+          description: 'Unix timestamp lower bound (inclusive)',
+        },
+        toTs: {
+          type: 'number',
+          description: 'Unix timestamp upper bound (inclusive)',
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor from previous export nextCursor',
+        },
+        convoIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'If set, export only these conversation IDs',
+        },
       },
       required: ['agentId'],
     },
   },
   {
     name: 'export_conversation',
-    description: 'Export a single conversation',
+    description:
+      'Export a single conversation. Requires a paid workspace (hasEverPaid === true); billed against monthly export quota.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2692,6 +2844,102 @@ const tools: Tool[] = [
         },
       },
       required: ['agentId', 'convoId', 'assignToUserId'],
+    },
+  },
+  {
+    name: 'get_conversations_bulk',
+    description:
+      'Fetch lean summaries for many conversation IDs in one call (fan-out GETs with concurrency). ' +
+      'Returns {ID, summary, ts, capturedVariables, userName, origin} per convo. Max 50 IDs per call — chunk larger audits. ' +
+      'Workflow: list_conversations with cursor to collect IDs, then this tool (do NOT loop get_conversation).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID' },
+        convoIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Conversation IDs (1–50)',
+        },
+      },
+      required: ['agentId', 'convoIds'],
+    },
+  },
+  {
+    name: 'query_conversations',
+    description:
+      'MCP-side filter over conversations (NOT a SQL analytics API). Cursor-pages list_conversations then bulk-gets details when filters need summary/capturedVariables/userName. ' +
+      'Bounded by maxScan (default 200). Use for audits like summaryContains or capturedVariableExists. ' +
+      'True server-side filters (hasQuote, eventDateWithin) need a future backend endpoint.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID' },
+        limit: { type: 'number', description: 'Max matches (default 50, max 100)' },
+        maxScan: { type: 'number', description: 'Max list rows to scan (default 200, max 500)' },
+        origin: { type: 'string', description: 'Exact origin match' },
+        tsFrom: { type: 'number', description: 'Unix ts lower bound' },
+        tsTo: { type: 'number', description: 'Unix ts upper bound' },
+        capturedVariableExists: { type: 'string', description: 'Require this capturedVariables key' },
+        capturedVariableEquals: {
+          type: 'object',
+          properties: {
+            key: { type: 'string' },
+            value: { type: 'string' },
+          },
+          required: ['key', 'value'],
+          description: 'Require capturedVariables[key] === value',
+        },
+        summaryContains: { type: 'string', description: 'Case-insensitive summary substring' },
+        hasUserName: { type: 'boolean', description: 'Require / exclude userName' },
+      },
+      required: ['agentId'],
+    },
+  },
+  {
+    name: 'get_agent_usage_bulk',
+    description:
+      'Fetch usage/credits for many agents in one call (fan-out). Max 20 agentIds. Optional shared date range.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Agent IDs (1–20)',
+        },
+        range: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: 'Start date (ISO)' },
+            to: { type: 'string', description: 'End date (ISO)' },
+          },
+          required: ['from', 'to'],
+          description: 'Optional date range',
+        },
+      },
+      required: ['agentIds'],
+    },
+  },
+  {
+    name: 'get_kb_docs_bulk',
+    description:
+      'Fetch many KB documents in one call (fan-out). Max 30 docIds. Default returns compact metadata + chunksPreview; set includeContent=true for full bodies.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID' },
+        docIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'KB document IDs (1–30)',
+        },
+        includeContent: {
+          type: 'boolean',
+          description: 'Include full chunks/content (default false)',
+        },
+      },
+      required: ['agentId', 'docIds'],
     },
   },
   // ==================== KNOWLEDGE BASE TOOLS ====================
@@ -3910,6 +4158,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'get_agent_usage_bulk': {
+        const validated = GetAgentUsageBulkSchema.parse(args);
+        const result = await getActiveClient().getAgentUsageBulk(
+          validated.agentIds,
+          validated.range
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       // ==================== CONVERSATION HANDLERS ====================
 
       case 'list_conversations': {
@@ -3917,7 +4181,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await getActiveClient().listConversations(
           validated.agentId,
           validated.page,
-          validated.limit
+          validated.limit,
+          validated.cursor
         );
         return {
           content: [
@@ -4012,7 +4277,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const validated = ExportAllConversationsSchema.parse(args);
         const result = await getActiveClient().exportAllConversations(
           validated.agentId,
-          validated.format
+          validated.format,
+          {
+            limit: validated.limit,
+            sort: validated.sort,
+            fromTs: validated.fromTs,
+            toTs: validated.toTs,
+            cursor: validated.cursor,
+            convoIds: validated.convoIds,
+          }
         );
         return {
           content: [
@@ -4059,6 +4332,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'get_conversations_bulk': {
+        const validated = GetConversationsBulkSchema.parse(args);
+        const result = await getActiveClient().getConversationsBulk(
+          validated.agentId,
+          validated.convoIds
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'query_conversations': {
+        const validated = QueryConversationsSchema.parse(args);
+        const result = await getActiveClient().queryConversations(validated.agentId, {
+          limit: validated.limit,
+          maxScan: validated.maxScan,
+          filters: {
+            origin: validated.origin,
+            tsFrom: validated.tsFrom,
+            tsTo: validated.tsTo,
+            capturedVariableExists: validated.capturedVariableExists,
+            capturedVariableEquals: validated.capturedVariableEquals,
+            summaryContains: validated.summaryContains,
+            hasUserName: validated.hasUserName,
+          },
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       // ==================== KNOWLEDGE BASE HANDLERS ====================
 
       case 'create_kb_doc': {
@@ -4095,6 +4409,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_kb_doc': {
         const validated = GetKBDocSchema.parse(args);
         const result = await getActiveClient().getKBDoc(validated.agentId, validated.docId);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_kb_docs_bulk': {
+        const validated = GetKbDocsBulkSchema.parse(args);
+        const result = await getActiveClient().getKbDocsBulk(
+          validated.agentId,
+          validated.docIds,
+          { includeContent: validated.includeContent }
+        );
         return {
           content: [
             {

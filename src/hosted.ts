@@ -31,7 +31,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const MCP_PATH = process.env.MCP_HTTP_PATH || '/mcp';
 const SESSION_IDLE_MS = Number(process.env.CONVOCORE_HOSTED_SESSION_IDLE_MS || 30 * 60 * 1000);
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.3.8';
+const PACKAGE_VERSION = '2.4.0';
 
 type SessionRecord = {
   transport: StreamableHTTPServerTransport;
