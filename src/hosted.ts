@@ -27,6 +27,7 @@ import {
   runWithRequestContext,
   type RequestContextStore,
 } from './request-context.js';
+import { isMcpPathname } from './connector-url.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
 import { handleHostedOAuth, wwwAuthenticateChallenge } from './hosted-oauth.js';
 import { buildInstallLinks, normalizeRegion } from './install-links.js';
@@ -43,7 +44,7 @@ const SESSION_IDLE_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : ONE_YEAR_MS;
 })();
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.4.1';
+const PACKAGE_VERSION = '2.4.2';
 const INSTALL_LINKS_PATH = '/v1/install-links';
 
 function resolveRequestSecret(req: IncomingMessage): string | null {
@@ -360,8 +361,8 @@ const httpServer = createServer(async (req, res) => {
         },
         notes: [
           'Cursor deeplink embeds Authorization + X-ConvoCore-Region (true one-click).',
-          'Claude connectorUrl includes ?token=<secret>&region=… so OAuth authorize can auto-approve.',
-          'Claude always runs OAuth DCR against this host — leave Client ID empty; registration is automatic.',
+          'Claude connectorUrl uses /t/<base64url(secret)>/mcp?region=… (path survives OAuth resource stripping of ?token=).',
+          'Authorize shows a one-click Connect page (auto-submits); no secret paste when path token is present.',
           'OAuth access_token is the workspace secret; expires_in ~10 years + refresh_token.',
         ],
       });
@@ -412,10 +413,11 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  if (pathname !== MCP_PATH) {
+  // /mcp or /t/<secret>/mcp (Claude connector path form)
+  if (!isMcpPathname(pathname, MCP_PATH)) {
     sendJson(res, 404, {
       error: 'Not found',
-      hint: `MCP endpoint is ${MCP_PATH}; install links at ${INSTALL_LINKS_PATH}`,
+      hint: `MCP endpoint is ${MCP_PATH} or /t/<token>/mcp; install links at ${INSTALL_LINKS_PATH}`,
     });
     return;
   }

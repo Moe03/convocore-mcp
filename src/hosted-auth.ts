@@ -1,9 +1,9 @@
 /**
  * Extract workspace secret from Authorization Bearer, allowlisted alt headers,
- * or connector URL query (Claude custom connectors cannot embed headers in install links).
- *
- * Query keys (first match wins): token | workspaceSecret | secret | apiKey
+ * path `/t/<secret>/mcp`, or query ?token= (Claude connectors).
  */
+
+import { extractPathSecret } from './connector-url.js';
 
 const QUERY_SECRET_KEYS = ['token', 'workspaceSecret', 'secret', 'apiKey'] as const;
 
@@ -47,10 +47,24 @@ export function extractQuerySecret(
   return null;
 }
 
+/** Pull secret from /t/<base64url>/mcp path on the request URL. */
+export function extractUrlPathSecret(
+  requestUrl: string | undefined,
+  hostHeader?: string
+): string | null {
+  if (!requestUrl) return null;
+  try {
+    const url = new URL(requestUrl, `http://${hostHeader || 'localhost'}`);
+    return extractPathSecret(url.pathname);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve workspace secret for a hosted MCP request.
- * Prefer Authorization: Bearer (Cursor). Fall back to x-api-key / x-auth-token
- * (Claude request-header allowlist), then URL query token (Claude install links).
+ * Prefer Authorization: Bearer (Cursor). Fall back to x-api-key / x-auth-token,
+ * then path /t/.../mcp, then ?token= query.
  */
 export function resolveHostedWorkspaceSecret(
   authorizationHeader: string | string[] | undefined,
@@ -69,6 +83,9 @@ export function resolveHostedWorkspaceSecret(
 
   const authToken = headerValue(options?.authTokenHeader);
   if (authToken) return authToken;
+
+  const pathSecret = extractUrlPathSecret(options?.requestUrl, options?.hostHeader);
+  if (pathSecret) return pathSecret;
 
   return extractQuerySecret(options?.requestUrl, options?.hostHeader);
 }

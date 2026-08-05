@@ -28,6 +28,17 @@ describe('hosted-auth', () => {
     );
   });
 
+  it('reads secret from /t/<base64url>/mcp path', async () => {
+    const { encodePathSecret } = await import('../dist/connector-url.js');
+    const encoded = encodePathSecret('vg_path');
+    assert.equal(
+      resolveHostedWorkspaceSecret(undefined, {
+        requestUrl: `/t/${encoded}/mcp?region=eu-gcp`,
+      }),
+      'vg_path'
+    );
+  });
+
   it('accepts x-api-key', () => {
     assert.equal(
       resolveHostedWorkspaceSecret(undefined, {

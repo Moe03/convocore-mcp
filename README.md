@@ -262,7 +262,7 @@ Response highlights:
 | `cursor.deeplink` | **Add to Cursor** — true one-click (`cursor://…/mcp/install` with URL + `Authorization` + `X-ConvoCore-Region` in base64 config) |
 | `cursor.webFallback` | `https://cursor.com/en/install-mcp?…` if the protocol handler is not registered yet |
 | `claude.installUrl` | **Add to Claude** — opens the official prefilled custom-connector modal |
-| `claude.connectorUrl` | Includes `?token=<workspaceSecret>&region=…` (Claude install links **cannot** embed headers) |
+| `claude.connectorUrl` | `/t/<base64url(secret)>/mcp?region=…` (path keeps the secret after Claude strips `?token=` from OAuth `resource`) |
 | `claudeDesktop` | Optional local `mcp-remote` JSON for Claude Desktop config files |
 
 **Why Claude needs `?token=` (and OAuth on the host)**
@@ -270,7 +270,7 @@ Response highlights:
 - Cursor deeplinks embed headers in base64 — secret travels with the install.
 - Claude’s install URL only prefills **name + connector URL**. No header query params exist.
 - Claude then runs **OAuth Dynamic Client Registration** against the MCP host. Without `/oauth/register` + authorize/token, you get *“Couldn't register with ConvoCore’s sign-in service”*.
-- Hosted MCP implements that OAuth AS. Authorize **auto-approves** when the connector/`resource` URL contains `?token=`. Access tokens **are** the workspace secret, `expires_in` ≈ **10 years**, plus refresh tokens.
+- Hosted MCP implements that OAuth AS. Claude often strips `?token=` from OAuth `resource`, so the secret is in the **path** (`/t/…/mcp`). Authorize shows a one-click **Connect** page (auto-submits) — no paste. Access tokens **are** the workspace secret, `expires_in` ≈ **10 years**, plus refresh.
 - MCP transport sessions idle-evict after ~**1 year** by default (`CONVOCORE_HOSTED_SESSION_IDLE_MS=0` disables eviction). Reconnect recreates a session with the same secret.
 
 **Security note:** `?token=` in a Claude connector URL is a pragmatic tradeoff (logs/history). Prefer Cursor headers when possible; rotate the workspace secret if a link leaks.

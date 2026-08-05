@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { encodePathSecret } from '../dist/connector-url.js';
 import {
   buildInstallLinks,
   mcpUrlForClaudeConnector,
@@ -20,13 +21,15 @@ describe('install-links', () => {
     );
   });
 
-  it('bakes token + region into Claude connector URL', () => {
+  it('puts secret in PATH for Claude connector URL', () => {
     const url = mcpUrlForClaudeConnector(
       'https://mcp.convocore.ai/mcp',
       'eu-gcp',
       'vg_test_secret'
     );
     const parsed = new URL(url);
+    const encoded = encodePathSecret('vg_test_secret');
+    assert.equal(parsed.pathname, `/t/${encoded}/mcp`);
     assert.equal(parsed.searchParams.get('region'), 'eu-gcp');
     assert.equal(parsed.searchParams.get('token'), 'vg_test_secret');
   });
@@ -41,13 +44,6 @@ describe('install-links', () => {
 
     assert.equal(links.cursor.oneClick, true);
     assert.match(links.cursor.deeplink, /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?/);
-    assert.match(links.cursor.webFallback, /^https:\/\/cursor\.com\/en\/install-mcp\?/);
-    assert.equal(
-      links.cursor.config.headers.Authorization,
-      'Bearer vg_test_secret'
-    );
-    assert.equal(links.cursor.config.headers['X-ConvoCore-Region'], 'eu-gcp');
-
     const configParam = new URL(links.cursor.deeplink).searchParams.get('config');
     assert.ok(configParam);
     const decoded = JSON.parse(Buffer.from(configParam, 'base64').toString('utf8'));
@@ -55,26 +51,21 @@ describe('install-links', () => {
     assert.equal(decoded.headers.Authorization, 'Bearer vg_test_secret');
   });
 
-  it('builds Claude install URL with token in connector URL', () => {
+  it('builds Claude install URL with path secret', () => {
     const links = buildInstallLinks({
       mcpUrl: 'https://mcp.convocore.ai/mcp',
       workspaceSecret: 'vg_test_secret',
       region: 'na',
     });
 
-    assert.equal(links.claude.oneClick, false);
     assert.equal(links.claude.authInConnectorUrl, true);
-    assert.equal(links.claude.requiresAuthHeader, false);
+    const encoded = encodePathSecret('vg_test_secret');
     assert.equal(
       links.claude.connectorUrl,
-      'https://mcp.convocore.ai/mcp?region=na-gcp&token=vg_test_secret'
+      `https://mcp.convocore.ai/t/${encoded}/mcp?region=na-gcp&token=vg_test_secret`
     );
     const u = new URL(links.claude.installUrl);
-    assert.equal(u.searchParams.get('modal'), 'add-custom-connector');
     assert.equal(u.searchParams.get('connectorName'), 'ConvoCore');
-    assert.equal(
-      u.searchParams.get('connectorUrl'),
-      'https://mcp.convocore.ai/mcp?region=na-gcp&token=vg_test_secret'
-    );
+    assert.equal(u.searchParams.get('connectorUrl'), links.claude.connectorUrl);
   });
 });

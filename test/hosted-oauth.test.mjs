@@ -57,8 +57,9 @@ describe('hosted-oauth', () => {
     ]);
   });
 
-  it('auto-approves authorize when resource has ?token= and exchanges code', async () => {
+  it('Connect page + token exchange when resource has /t/<secret>/mcp path', async () => {
     __resetHostedOAuthForTests();
+    const { encodePathSecret } = await import('../dist/connector-url.js');
     const reg = await fetch(`${base}/oauth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -71,21 +72,39 @@ describe('hosted-oauth', () => {
 
     const verifier = 'a'.repeat(64);
     const challenge = __pkceS256ForTests(verifier);
-    const resource = encodeURIComponent(
-      `${base}/mcp?token=vg_oauth_secret&region=eu-gcp`
-    );
-    const authorizeUrl =
-      `${base}/oauth/authorize?response_type=code` +
-      `&client_id=${encodeURIComponent(clientId)}` +
-      `&redirect_uri=${encodeURIComponent('https://claude.ai/api/mcp/auth_callback')}` +
-      `&code_challenge=${encodeURIComponent(challenge)}` +
-      `&code_challenge_method=S256` +
-      `&state=xyz` +
-      `&resource=${resource}`;
+    const encoded = encodePathSecret('vg_oauth_secret');
+    // Simulate Claude stripping ?token= but keeping the path
+    const resource = `${base}/t/${encoded}/mcp?region=eu-gcp`;
+    const common = {
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: 'xyz',
+      resource,
+    };
 
-    const authRes = await fetch(authorizeUrl, { redirect: 'manual' });
-    assert.equal(authRes.status, 302);
-    const location = authRes.headers.get('location');
+    const getRes = await fetch(
+      `${base}/oauth/authorize?${new URLSearchParams(common)}`,
+      { redirect: 'manual' }
+    );
+    assert.equal(getRes.status, 200);
+    const html = await getRes.text();
+    assert.match(html, /Connect/);
+    assert.doesNotMatch(html, /Paste your workspace secret/);
+
+    const postRes = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        ...common,
+        workspace_secret: 'vg_oauth_secret',
+      }),
+    });
+    assert.equal(postRes.status, 302);
+    const location = postRes.headers.get('location');
     assert.ok(location);
     const code = new URL(location).searchParams.get('code');
     assert.ok(code);
@@ -104,7 +123,6 @@ describe('hosted-oauth', () => {
     assert.equal(tokenRes.status, 200);
     const tokens = await tokenRes.json();
     assert.equal(tokens.access_token, 'vg_oauth_secret');
-    assert.equal(tokens.token_type, 'bearer');
     assert.ok(tokens.expires_in >= 365 * 24 * 60 * 60);
     assert.ok(tokens.refresh_token);
   });

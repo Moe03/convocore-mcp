@@ -8,12 +8,14 @@
  * Access tokens ARE the workspace secret (Bearer), with ~10y expiry + refresh,
  * so MCP auth stays Authorization: Bearer <WORKSPACE_SECRET>.
  *
- * Authorize auto-approves when the OAuth `resource` (or connector URL) includes
- * ?token=<workspaceSecret>. Otherwise shows a one-field paste form.
+ * Claude often strips ?token= from OAuth `resource`. Secrets live in the path:
+ *   /t/<base64url(secret)>/mcp
+ * When present → redirect (or one-click Connect). No paste form.
  */
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { extractSecretFromConnectorUrl } from './connector-url.js';
 
 const TEN_YEARS_SEC = 10 * 365 * 24 * 60 * 60;
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -71,26 +73,6 @@ export function publicBaseUrl(req: IncomingMessage): string {
       : undefined) ||
     (typeof req.headers.host === 'string' ? req.headers.host : 'localhost');
   return `${proto}://${host}`;
-}
-
-function extractTokenFromResource(resource: string | null | undefined): {
-  secret?: string;
-  region?: string;
-} {
-  if (!resource) return {};
-  try {
-    const url = new URL(resource);
-    const secret =
-      url.searchParams.get('token')?.trim() ||
-      url.searchParams.get('workspaceSecret')?.trim() ||
-      url.searchParams.get('secret')?.trim() ||
-      url.searchParams.get('apiKey')?.trim() ||
-      undefined;
-    const region = url.searchParams.get('region')?.trim() || undefined;
-    return { secret, region };
-  } catch {
-    return {};
-  }
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -184,17 +166,48 @@ function issueTokens(workspaceSecret: string, clientId: string, region?: string)
   };
 }
 
-function authorizeFormHtml(params: URLSearchParams, error?: string): string {
-  const err = error
-    ? `<p style="color:#b91c1c;margin:0 0 12px">${escapeHtml(error)}</p>`
-    : '';
-  const hidden = [...params.entries()]
-    .filter(([k]) => k !== 'workspace_secret')
+function hiddenFieldsHtml(params: URLSearchParams, extra?: Record<string, string>): string {
+  const merged = new URLSearchParams(params);
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) merged.set(k, v);
+  }
+  return [...merged.entries()]
     .map(
       ([k, v]) =>
         `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}" />`
     )
     .join('\n');
+}
+
+/** One-click Connect — secret already known from connector URL / path. */
+function connectOnlyHtml(params: URLSearchParams, workspaceSecret: string): string {
+  const hidden = hiddenFieldsHtml(params, { workspace_secret: workspaceSecret });
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Connect ConvoCore</title>
+<style>
+  body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0b1220;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+  .card{width:min(380px,92vw);background:#111827;border:1px solid #1f2937;border-radius:16px;padding:28px;text-align:center}
+  h1{font-size:1.25rem;margin:0 0 8px} p{color:#9ca3af;font-size:.95rem;line-height:1.45;margin:0 0 20px}
+  button{width:100%;padding:14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
+  button:hover{background:#1d4ed8}
+</style></head><body><div class="card">
+  <h1>Connect ConvoCore</h1>
+  <p>Your workspace is ready. Click Connect to finish linking Claude.</p>
+  <form id="connect" method="POST" action="/oauth/authorize">
+    ${hidden}
+    <button type="submit">Connect</button>
+  </form>
+  <script>setTimeout(function(){var f=document.getElementById('connect');if(f)f.submit();},50);</script>
+</div></body></html>`;
+}
+
+/** Last-resort paste form — only if Claude omitted the connector secret entirely. */
+function authorizeFormHtml(params: URLSearchParams, error?: string): string {
+  const err = error
+    ? `<p style="color:#b91c1c;margin:0 0 12px">${escapeHtml(error)}</p>`
+    : '';
+  const hidden = hiddenFieldsHtml(params);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Connect ConvoCore MCP</title>
@@ -208,13 +221,13 @@ function authorizeFormHtml(params: URLSearchParams, error?: string): string {
   button:hover{background:#1d4ed8}
 </style></head><body><div class="card">
   <h1>Connect ConvoCore</h1>
-  <p>Paste your workspace secret once. Claude will keep a long-lived connection (refresh ~10 years). Leave OAuth Client ID empty in Claude — registration is automatic.</p>
+  <p>We could not read your workspace secret from the connector URL. Paste it once to finish.</p>
   ${err}
   <form method="POST" action="/oauth/authorize">
     ${hidden}
     <label for="workspace_secret">Workspace secret</label>
     <input id="workspace_secret" name="workspace_secret" type="password" autocomplete="off" required placeholder="vg_…" />
-    <button type="submit">Authorize Claude</button>
+    <button type="submit">Connect</button>
   </form>
 </div></body></html>`;
 }
@@ -333,7 +346,7 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     }
   }
 
-  const fromResource = extractTokenFromResource(resource);
+  const fromResource = extractSecretFromConnectorUrl(resource);
   const secret = workspaceSecretParam || fromResource.secret;
   const region = fromResource.region;
 
@@ -343,6 +356,13 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
       return;
     }
     sendHtml(res, 200, authorizeFormHtml(params));
+    return;
+  }
+
+  // GET with secret already in resource/path: one-click Connect (auto-submits).
+  // POST continues to issue the auth code.
+  if (req.method === 'GET') {
+    sendHtml(res, 200, connectOnlyHtml(params, secret));
     return;
   }
 
@@ -432,13 +452,13 @@ export async function handleHostedOAuth(
     return true;
   }
 
-  if (
-    req.method === 'GET' &&
-    (pathname === '/.well-known/oauth-protected-resource' ||
-      pathname === `/.well-known/oauth-protected-resource${mcpPath}` ||
-      pathname === '/.well-known/oauth-protected-resource/mcp')
-  ) {
-    sendJson(res, 200, protectedResourceDoc(base, mcpPath));
+  if (req.method === 'GET' && pathname.startsWith('/.well-known/oauth-protected-resource')) {
+    const suffix = pathname.slice('/.well-known/oauth-protected-resource'.length);
+    const resourcePath =
+      !suffix || suffix === '/'
+        ? mcpPath
+        : suffix; // e.g. /mcp or /t/<seg>/mcp
+    sendJson(res, 200, protectedResourceDoc(base, resourcePath));
     return true;
   }
 
