@@ -262,14 +262,18 @@ Response highlights:
 | `cursor.deeplink` | **Add to Cursor** — true one-click (`cursor://…/mcp/install` with URL + `Authorization` + `X-ConvoCore-Region` in base64 config) |
 | `cursor.webFallback` | `https://cursor.com/en/install-mcp?…` if the protocol handler is not registered yet |
 | `claude.installUrl` | **Add to Claude** — opens the official prefilled custom-connector modal |
-| `claude.requestHeaders` | Paste into Claude **Request headers** (beta): `authorization` = `Bearer …` |
+| `claude.connectorUrl` | Includes `?token=<workspaceSecret>&region=…` (Claude install links **cannot** embed headers) |
 | `claudeDesktop` | Optional local `mcp-remote` JSON for Claude Desktop config files |
 
-**Truthful UX**
+**Why Claude needs `?token=` (and OAuth on the host)**
 
-- **Cursor** = real one-click MCP install (secret is inside the deeplink config — treat the link like a credential).
-- **Claude** = official prefilled connector install only (name + URL). There is **no** browser API to silently write Desktop/connectors config. Region is baked into the connector URL as `?region=` (hosted accepts that query). User confirms, then adds the Authorization header once.
-- Optional later: Claude directory listing (`https://claude.ai/directory/connectors/SLUG`) for a nicer Connect card.
+- Cursor deeplinks embed headers in base64 — secret travels with the install.
+- Claude’s install URL only prefills **name + connector URL**. No header query params exist.
+- Claude then runs **OAuth Dynamic Client Registration** against the MCP host. Without `/oauth/register` + authorize/token, you get *“Couldn't register with ConvoCore’s sign-in service”*.
+- Hosted MCP implements that OAuth AS. Authorize **auto-approves** when the connector/`resource` URL contains `?token=`. Access tokens **are** the workspace secret, `expires_in` ≈ **10 years**, plus refresh tokens.
+- MCP transport sessions idle-evict after ~**1 year** by default (`CONVOCORE_HOSTED_SESSION_IDLE_MS=0` disables eviction). Reconnect recreates a session with the same secret.
+
+**Security note:** `?token=` in a Claude connector URL is a pragmatic tradeoff (logs/history). Prefer Cursor headers when possible; rotate the workspace secret if a link leaks.
 
 You can also build the same URLs client-side with `buildInstallLinks` from `dist/install-links.js` without calling the API.
 

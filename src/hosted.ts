@@ -5,9 +5,12 @@
  *
  * Deploy behind HTTPS (e.g. https://mcp.convocore.ai/mcp). Clients authenticate with:
  *   Authorization: Bearer <WORKSPACE_SECRET>
+ *   or (Claude connectors) ?token=<WORKSPACE_SECRET> on the MCP URL
+ *   or x-api-key / x-auth-token headers
  *
  * Optional per-request region override:
  *   X-ConvoCore-Region: eu-gcp | na-gcp
+ *   or ?region=eu-gcp|na-gcp
  *
  * Stdio / npx entrypoint (dist/index.js) is unchanged.
  */
@@ -25,15 +28,32 @@ import {
   type RequestContextStore,
 } from './request-context.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
+import { handleHostedOAuth, wwwAuthenticateChallenge } from './hosted-oauth.js';
 import { buildInstallLinks, normalizeRegion } from './install-links.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
 const MCP_PATH = process.env.MCP_HTTP_PATH || '/mcp';
-const SESSION_IDLE_MS = Number(process.env.CONVOCORE_HOSTED_SESSION_IDLE_MS || 30 * 60 * 1000);
+/** Default ~1 year. Set CONVOCORE_HOSTED_SESSION_IDLE_MS=0 to disable idle eviction. */
+const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+const SESSION_IDLE_MS = (() => {
+  const raw = process.env.CONVOCORE_HOSTED_SESSION_IDLE_MS;
+  if (raw === undefined || raw === '') return ONE_YEAR_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : ONE_YEAR_MS;
+})();
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.4.0';
+const PACKAGE_VERSION = '2.4.1';
 const INSTALL_LINKS_PATH = '/v1/install-links';
+
+function resolveRequestSecret(req: IncomingMessage): string | null {
+  return resolveHostedWorkspaceSecret(req.headers.authorization, {
+    requestUrl: req.url,
+    hostHeader: typeof req.headers.host === 'string' ? req.headers.host : undefined,
+    apiKeyHeader: req.headers['x-api-key'],
+    authTokenHeader: req.headers['x-auth-token'],
+  });
+}
 
 type SessionRecord = {
   transport: StreamableHTTPServerTransport;
@@ -117,6 +137,8 @@ function applyCors(req: IncomingMessage, res: ServerResponse): void {
       'Content-Type',
       'Accept',
       'Authorization',
+      'X-Api-Key',
+      'X-Auth-Token',
       'Mcp-Session-Id',
       'MCP-Protocol-Version',
       'Last-Event-ID',
@@ -133,6 +155,19 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   }
   res.writeHead(status);
   res.end(JSON.stringify(payload));
+}
+
+function sendUnauthorized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  message: string
+): void {
+  res.setHeader('WWW-Authenticate', wwwAuthenticateChallenge(req));
+  sendJson(res, 401, {
+    jsonrpc: '2.0',
+    error: { code: -32001, message },
+    id: null,
+  });
 }
 
 function getHeaderSessionId(req: IncomingMessage): string | undefined {
@@ -197,7 +232,7 @@ async function resolveSession(
   parsedBody?: unknown
 ): Promise<SessionRecord | null> {
   const sessionId = getHeaderSessionId(req);
-  const bearer = resolveHostedWorkspaceSecret(req.headers.authorization);
+  const secret = resolveRequestSecret(req);
 
   if (sessionId) {
     const existing = sessions.get(sessionId);
@@ -210,15 +245,12 @@ async function resolveSession(
       return null;
     }
 
-    if (!bearer || !secretsEqual(bearer, existing.workspaceSecret)) {
-      sendJson(res, 401, {
-        jsonrpc: '2.0',
-        error: {
-          code: -32001,
-          message: 'Authorization required: Bearer <WORKSPACE_SECRET>',
-        },
-        id: null,
-      });
+    if (!secret || !secretsEqual(secret, existing.workspaceSecret)) {
+      sendUnauthorized(
+        req,
+        res,
+        'Authorization required: Bearer <WORKSPACE_SECRET> or ?token=<WORKSPACE_SECRET>'
+      );
       return null;
     }
 
@@ -232,26 +264,25 @@ async function resolveSession(
       error: {
         code: -32000,
         message:
-          'Missing Mcp-Session-Id header. Send an initialize request with Authorization first.',
+          'Missing Mcp-Session-Id header. Send an initialize request with Authorization (or ?token=) first.',
       },
       id: null,
     });
     return null;
   }
 
-  if (!bearer) {
-    sendJson(res, 401, {
-      jsonrpc: '2.0',
-      error: {
-        code: -32001,
-        message: 'Authorization required: Bearer <WORKSPACE_SECRET>',
-      },
-      id: null,
-    });
+  if (!secret) {
+    // Claude custom connectors require OAuth DCR. WWW-Authenticate points at our AS.
+    // Install links include ?token= so /oauth/authorize can auto-approve.
+    sendUnauthorized(
+      req,
+      res,
+      'Authorization required: Bearer <WORKSPACE_SECRET> or ?token=<WORKSPACE_SECRET> on the MCP URL'
+    );
     return null;
   }
 
-  return createSession(bearer, parseApiRegion(req));
+  return createSession(secret, parseApiRegion(req));
 }
 
 async function handleMcpRequest(
@@ -273,14 +304,16 @@ function normalizePath(url: string | undefined): string {
   return q === -1 ? url : url.slice(0, q);
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [sessionId, record] of sessions.entries()) {
-    if (now - record.lastSeenAt > SESSION_IDLE_MS) {
-      void destroySession(sessionId);
+if (SESSION_IDLE_MS > 0) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [sessionId, record] of sessions.entries()) {
+      if (now - record.lastSeenAt > SESSION_IDLE_MS) {
+        void destroySession(sessionId);
+      }
     }
-  }
-}, Math.min(60_000, Math.max(5_000, Math.floor(SESSION_IDLE_MS / 6)))).unref();
+  }, Math.min(60_000, Math.max(5_000, Math.floor(SESSION_IDLE_MS / 6)))).unref();
+}
 
 const httpServer = createServer(async (req, res) => {
   applyCors(req, res);
@@ -300,10 +333,16 @@ const httpServer = createServer(async (req, res) => {
       version: PACKAGE_VERSION,
       path: MCP_PATH,
       installLinksPath: INSTALL_LINKS_PATH,
+      oauth: true,
+      sessionIdleMs: SESSION_IDLE_MS,
       port: PORT,
       sessions: sessions.size,
       uptimeSec: Math.floor((Date.now() - STARTED_AT) / 1000),
     });
+    return;
+  }
+
+  if (await handleHostedOAuth(req, res, pathname, MCP_PATH)) {
     return;
   }
 
@@ -321,8 +360,9 @@ const httpServer = createServer(async (req, res) => {
         },
         notes: [
           'Cursor deeplink embeds Authorization + X-ConvoCore-Region (true one-click).',
-          'Claude install URL prefills name + URL only; user confirms and pastes authorization header.',
-          'Region for Claude is baked into connectorUrl as ?region= (hosted accepts that query).',
+          'Claude connectorUrl includes ?token=<secret>&region=… so OAuth authorize can auto-approve.',
+          'Claude always runs OAuth DCR against this host — leave Client ID empty; registration is automatic.',
+          'OAuth access_token is the workspace secret; expires_in ~10 years + refresh_token.',
         ],
       });
       return;

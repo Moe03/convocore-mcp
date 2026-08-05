@@ -2,8 +2,8 @@
  * One-click / assisted install URL builders for Cursor + Claude.
  *
  * Cursor: real deeplink with remote URL + Authorization + region headers in base64 config.
- * Claude: official prefilled custom-connector modal (name + URL only). Headers are not
- * supported on the install link — region is baked into the connector URL as ?region=.
+ * Claude: official prefilled custom-connector modal. Install links cannot embed headers, so
+ * the connector URL carries ?token=<workspaceSecret>&region=… (hosted accepts query auth).
  */
 
 export type ConvoCoreRegion = 'eu-gcp' | 'na-gcp';
@@ -29,7 +29,7 @@ export type InstallLinksResult = {
   name: string;
   region: ConvoCoreRegion;
   mcpUrl: string;
-  /** Connector URL for Claude (includes ?region=) */
+  /** Connector URL for Claude (includes ?token= and ?region=) */
   claudeConnectorUrl: string;
   cursor: {
     /** True one-click: opens Cursor install dialog with auth + region embedded */
@@ -40,15 +40,20 @@ export type InstallLinksResult = {
     oneClick: true;
   };
   claude: {
-    /** Prefills Add custom connector (user must confirm; then add Authorization header) */
+    /** Prefills Add custom connector (user confirms; secret is already in connector URL) */
     installUrl: string;
     adminInstallUrl: string;
     connectorUrl: string;
-    /** Values to paste into Claude Request headers (beta allowlist) */
+    /**
+     * Optional Request headers if the UI exposes them. Prefer URL ?token= for Claude
+     * because many accounts still hit OAuth when headers are missing.
+     */
     requestHeaders: Array<{ name: string; value: string; required: boolean }>;
     oneClick: false;
     requiresUserConfirm: true;
-    requiresAuthHeader: true;
+    /** Secret is embedded in connectorUrl as ?token= */
+    authInConnectorUrl: true;
+    requiresAuthHeader: false;
     steps: string[];
   };
   /** Local Claude Desktop / mcp-remote JSON — not installable from a browser click */
@@ -75,10 +80,25 @@ export function normalizeRegion(
   throw new Error(`Invalid region "${region}". Use eu-gcp or na-gcp.`);
 }
 
-/** Append or replace ?region= on the MCP URL (for Claude + optional hosted query auth path). */
+/** Append or replace ?region= on the MCP URL. */
 export function mcpUrlWithRegion(mcpUrl: string, region: ConvoCoreRegion): string {
   const url = new URL(mcpUrl);
   url.searchParams.set('region', region);
+  return url.toString();
+}
+
+/**
+ * Claude connector URL: region + workspace secret in query.
+ * Hosted MCP accepts ?token= as Authorization equivalent (Claude cannot pass headers via install link).
+ */
+export function mcpUrlForClaudeConnector(
+  mcpUrl: string,
+  region: ConvoCoreRegion,
+  workspaceSecret: string
+): string {
+  const url = new URL(mcpUrl);
+  url.searchParams.set('region', region);
+  url.searchParams.set('token', workspaceSecret);
   return url.toString();
 }
 
@@ -165,7 +185,6 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
   const secret = input.workspaceSecret.trim();
   if (!secret) throw new Error('workspaceSecret is required');
 
-  // Validate URL early
   void new URL(mcpUrl);
 
   const cursorConfig = buildCursorRemoteConfig({
@@ -173,7 +192,7 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
     workspaceSecret: secret,
     region,
   });
-  const claudeConnectorUrl = mcpUrlWithRegion(mcpUrl, region);
+  const claudeConnectorUrl = mcpUrlForClaudeConnector(mcpUrl, region, secret);
 
   return {
     name,
@@ -194,18 +213,19 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
         {
           name: 'authorization',
           value: `Bearer ${secret}`,
-          required: true,
+          required: false,
         },
       ],
       oneClick: false,
       requiresUserConfirm: true,
-      requiresAuthHeader: true,
+      authInConnectorUrl: true,
+      requiresAuthHeader: false,
       steps: [
-        'Open the Claude install URL (signs in if needed).',
-        'Confirm the prefilled ConvoCore connector name and URL.',
-        'In Request headers (beta), add authorization = Bearer <workspace secret>.',
-        'Region is already in the connector URL (?region=); no X-ConvoCore-Region header needed.',
-        'After confirm, the connector appears in Claude Desktop / web as a remote connector.',
+        'Open the Claude install URL (sign in if needed).',
+        'Confirm the prefilled ConvoCore name and URL (includes ?token= and ?region=).',
+        'Leave OAuth Client ID / Client Secret EMPTY — Claude auto-registers (DCR).',
+        'If Claude opens ConvoCore authorize, it should auto-approve from ?token= (or paste secret once).',
+        'Connection tokens last ~10 years (with refresh). After that, reconnect with the same secret.',
       ],
     },
     claudeDesktop: buildClaudeDesktopRemoteConfig({
