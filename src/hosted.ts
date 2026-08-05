@@ -25,6 +25,7 @@ import {
   type RequestContextStore,
 } from './request-context.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
+import { buildInstallLinks, normalizeRegion } from './install-links.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -32,6 +33,7 @@ const MCP_PATH = process.env.MCP_HTTP_PATH || '/mcp';
 const SESSION_IDLE_MS = Number(process.env.CONVOCORE_HOSTED_SESSION_IDLE_MS || 30 * 60 * 1000);
 const STARTED_AT = Date.now();
 const PACKAGE_VERSION = '2.4.0';
+const INSTALL_LINKS_PATH = '/v1/install-links';
 
 type SessionRecord = {
   transport: StreamableHTTPServerTransport;
@@ -56,12 +58,29 @@ function secretsEqual(a: string, b: string): boolean {
   return timingSafeEqual(aBuf, bBuf);
 }
 
-function parseApiRegion(req: IncomingMessage): 'eu-gcp' | 'na-gcp' | undefined {
-  const raw = req.headers['x-convocore-region'];
-  const value = (Array.isArray(raw) ? raw[0] : raw)?.trim().toLowerCase();
+function parseRegionValue(raw: string | undefined): 'eu-gcp' | 'na-gcp' | undefined {
+  if (!raw) return undefined;
+  const value = raw.trim().toLowerCase();
   if (value === 'eu-gcp' || value === 'eu') return 'eu-gcp';
   if (value === 'na-gcp' || value === 'na') return 'na-gcp';
   return undefined;
+}
+
+/** Prefer X-ConvoCore-Region; fall back to ?region= on the request URL (Claude connectors). */
+function parseApiRegion(req: IncomingMessage): 'eu-gcp' | 'na-gcp' | undefined {
+  const headerRaw = req.headers['x-convocore-region'];
+  const fromHeader = parseRegionValue(
+    Array.isArray(headerRaw) ? headerRaw[0] : headerRaw
+  );
+  if (fromHeader) return fromHeader;
+
+  try {
+    const host = req.headers.host || 'localhost';
+    const url = new URL(req.url || '/', `http://${host}`);
+    return parseRegionValue(url.searchParams.get('region') ?? undefined);
+  } catch {
+    return undefined;
+  }
 }
 
 function isInitBody(body: unknown): boolean {
@@ -280,6 +299,7 @@ const httpServer = createServer(async (req, res) => {
       service: 'convocore-mcp-hosted',
       version: PACKAGE_VERSION,
       path: MCP_PATH,
+      installLinksPath: INSTALL_LINKS_PATH,
       port: PORT,
       sessions: sessions.size,
       uptimeSec: Math.floor((Date.now() - STARTED_AT) / 1000),
@@ -287,8 +307,76 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === INSTALL_LINKS_PATH) {
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        method: 'POST',
+        path: INSTALL_LINKS_PATH,
+        body: {
+          mcpUrl: 'https://mcp.convocore.ai/mcp',
+          workspaceSecret: '<WORKSPACE_SECRET>',
+          region: 'eu-gcp | na-gcp',
+          name: 'ConvoCore (optional)',
+        },
+        notes: [
+          'Cursor deeplink embeds Authorization + X-ConvoCore-Region (true one-click).',
+          'Claude install URL prefills name + URL only; user confirms and pastes authorization header.',
+          'Region for Claude is baked into connectorUrl as ?region= (hosted accepts that query).',
+        ],
+      });
+      return;
+    }
+
+    if (req.method === 'POST') {
+      try {
+        const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+        if (!body || typeof body !== 'object') {
+          sendJson(res, 400, { error: 'JSON body required' });
+          return;
+        }
+
+        const mcpUrl =
+          typeof body.mcpUrl === 'string'
+            ? body.mcpUrl
+            : typeof body.url === 'string'
+              ? body.url
+              : '';
+        const workspaceSecret =
+          typeof body.workspaceSecret === 'string'
+            ? body.workspaceSecret
+            : typeof body.secret === 'string'
+              ? body.secret
+              : '';
+        const regionRaw =
+          typeof body.region === 'string' ? body.region : '';
+        const name = typeof body.name === 'string' ? body.name : undefined;
+
+        const region = normalizeRegion(regionRaw);
+        const links = buildInstallLinks({
+          mcpUrl,
+          workspaceSecret,
+          region,
+          name,
+        });
+        sendJson(res, 200, { ok: true, ...links });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid request';
+        sendJson(res, 400, { error: message });
+      }
+      return;
+    }
+
+    res.writeHead(405, { Allow: 'GET, POST, OPTIONS' });
+    res.end();
+    return;
+  }
+
   if (pathname !== MCP_PATH) {
-    sendJson(res, 404, { error: 'Not found', hint: `MCP endpoint is ${MCP_PATH}` });
+    sendJson(res, 404, {
+      error: 'Not found',
+      hint: `MCP endpoint is ${MCP_PATH}; install links at ${INSTALL_LINKS_PATH}`,
+    });
     return;
   }
 

@@ -240,6 +240,39 @@ docker pull moe003/convocore-mcp:latest
 
 Any client that supports **stdio** MCP servers can use the same `command` + `args` + `env` pattern as above. The recommended `command`/`args` is `npx` + `["-y", "convocore-mcp"]`; Docker and local Node also work. Set the same environment variables.
 
+### Dashboard one-click install (hosted MCP)
+
+For a workspace dashboard button, call the hosted helper with the MCP URL, region, and workspace secret:
+
+```bash
+curl -sS -X POST https://mcp.convocore.ai/v1/install-links \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mcpUrl": "https://mcp.convocore.ai/mcp",
+    "workspaceSecret": "vg_…",
+    "region": "na-gcp",
+    "name": "ConvoCore"
+  }'
+```
+
+Response highlights:
+
+| Field | Use |
+|-------|-----|
+| `cursor.deeplink` | **Add to Cursor** — true one-click (`cursor://…/mcp/install` with URL + `Authorization` + `X-ConvoCore-Region` in base64 config) |
+| `cursor.webFallback` | `https://cursor.com/en/install-mcp?…` if the protocol handler is not registered yet |
+| `claude.installUrl` | **Add to Claude** — opens the official prefilled custom-connector modal |
+| `claude.requestHeaders` | Paste into Claude **Request headers** (beta): `authorization` = `Bearer …` |
+| `claudeDesktop` | Optional local `mcp-remote` JSON for Claude Desktop config files |
+
+**Truthful UX**
+
+- **Cursor** = real one-click MCP install (secret is inside the deeplink config — treat the link like a credential).
+- **Claude** = official prefilled connector install only (name + URL). There is **no** browser API to silently write Desktop/connectors config. Region is baked into the connector URL as `?region=` (hosted accepts that query). User confirms, then adds the Authorization header once.
+- Optional later: Claude directory listing (`https://claude.ai/directory/connectors/SLUG`) for a nicer Connect card.
+
+You can also build the same URLs client-side with `buildInstallLinks` from `dist/install-links.js` without calling the API.
+
 ---
 
 ## HTTP API mapping (what each tool calls)
