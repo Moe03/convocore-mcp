@@ -1,6 +1,6 @@
 # ConvoCore MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains **24 tools** for agents, conversations, knowledge bases, and single-URL scraping.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains many tools for agents, conversations, knowledge bases (including mass URL ingest), and single-URL scraping.
 
 [![npm version](https://img.shields.io/npm/v/convocore-mcp.svg)](https://www.npmjs.com/package/convocore-mcp)
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
@@ -28,7 +28,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 |------|-------|---------|
 | Agents | 9 | CRUD, list, search, export/import template, usage stats |
 | Conversations | 8 | CRUD, list with pagination, export (JSON/CSV), assign to user |
-| Knowledge base | 6 | CRUD, list, stats (described in-tool as **VG agents** only) |
+| Knowledge base | 7 | CRUD, list, stats, **`create_kb_from_urls`** mass ingest (VG agents) |
 | Scrape | 1 | Scrape one URL at a time and return the stored page result in the same tool call |
 | Interact (WS) | 1 | Drive one agent turn over the `/interact` WebSocket and aggregate the streamed result (plain Markdown **and** UI Engine snapshots) |
 | UI Engine | 1 | Static spec for the structured message format agents emit when `vg_enableUIEngine: true` |
@@ -307,6 +307,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `export_all_conversations` | GET | `/agents/{agentId}/convos/export?format=&limit=&cursor=&…` (requires paid workspace / `hasEverPaid`) |
 | `export_conversation` | GET | `/agents/{agentId}/convos/{convoId}/export?format=` |
 | `assign_conversation` | POST | `/agents/{agentId}/convos/{convoId}/assign` body `{ assignToUserId, delegatedBy? }` |
+| `create_kb_from_urls` | POST×N or 1 | Fan-out / batch `POST /agents/{agentId}/kb` with `sourceType=url` + `scrapeContent` |
 | `create_kb_doc` | POST | `/agents/{agentId}/kb` body: KB fields |
 | `list_kb_docs` | GET | `/agents/{agentId}/kb?page&pageSize` |
 | `get_kb_doc` | GET | `/agents/{agentId}/kb/{docId}` |
@@ -382,13 +383,15 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 Tool descriptions in code note **“VG agents only”** — KB operations target `/agents/{id}/kb` and may only apply to supported agent types on the ConvoCore side.
 
+**`create_kb_from_urls`** — **Preferred for many pages.** Required: `agentId`, `urls` (max **50**). Optional: `mode` (`per_url` default | `batch`), `name`, `tags`, `refreshRate` (`3d`|`7d`|`never`), `scrapeContent` (default true), `skipExisting` (default true). Uses the KB router to scrape — do **not** pre-scrape with `scrape_url` / web fetch. Scraping is async; poll `list_kb_docs` / `get_kb_doc`.
+
 **`create_kb_doc`** — Required: `agentId`, `name`, `sourceType`: `doc` | `url` | `sitemap`.
 
 - **`doc`:** use `content` for text.
 - **`url`:** use `urls` (array), optional `scrapeContent`.
 - **`sitemap`:** use `sitemapUrl`, optional `maxPages`.
 
-Optional: `metadata`, `tags`, `refreshRate` — `6h` | `12h` | `24h` | `7d` | `never` (default `never` in schema).
+Optional: `metadata`, `tags`, `refreshRate` — `3d` | `7d` | `never` (default `never`; matches ConvoCore API).
 
 **`list_kb_docs`** — Required: `agentId`. Optional: `page` (default 1), `pageSize` (default 20).
 
@@ -508,8 +511,9 @@ After configuration, users can ask their assistant things like:
 - “List all my ConvoCore agents” → `list_agents`
 - “Create an agent for this website from scratch” → `create_agent_from_template` (preferred default)
 - “Export all conversations for agent … as CSV” → `export_all_conversations`
-- “Add a URL source to the KB for agent …” → `create_kb_doc` with `sourceType: url`
-- “Scrape this URL for workspace … and return the result” → `scrape_url`
+- “Add many hotel/site pages to the KB” → `create_kb_from_urls` (KB router scrapes; do not web-fetch first)
+- “Add one URL / sitemap to the KB” → `create_kb_doc` with `sourceType: url|sitemap` + `scrapeContent: true`
+- “Scrape one URL for branding (colours/favicon)” → `scrape_url`
 
 Exact tool choice and arguments are up to the host model; the **tool descriptions** in `src/index.ts` are what the model sees.
 

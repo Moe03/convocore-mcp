@@ -573,6 +573,10 @@ const GetKbDocsBulkSchema = z.object({
 
 // ==================== KNOWLEDGE BASE SCHEMAS ====================
 
+const KbRefreshRateSchema = z
+  .enum(['3d', '7d', 'never'])
+  .describe('Auto re-crawl rate for URL/sitemap sources (API: 3d | 7d | never)');
+
 const CreateKBDocSchema = z.object({
   agentId: z.string().describe('The agent ID'),
   name: z.string().describe('Document name'),
@@ -580,11 +584,51 @@ const CreateKBDocSchema = z.object({
   content: z.string().optional().describe('Document content (for doc type)'),
   metadata: z.any().optional().describe('Additional metadata'),
   tags: z.array(z.string()).optional().describe('Tags for organization'),
-  refreshRate: z.enum(['6h', '12h', '24h', '7d', 'never']).optional().default('never').describe('Auto-refresh rate'),
+  refreshRate: KbRefreshRateSchema.optional().default('never'),
   urls: z.array(z.string()).optional().describe('URLs to process (for url type)'),
   sitemapUrl: z.string().optional().describe('Sitemap URL (for sitemap type)'),
   maxPages: z.number().optional().describe('Max pages from sitemap'),
-  scrapeContent: z.boolean().optional().describe('Whether to scrape content'),
+  scrapeContent: z
+    .boolean()
+    .optional()
+    .describe('Let the KB router scrape URLs (preferred). Default true for url/sitemap.'),
+});
+
+/** Mass URL ingest via KB router — preferred over scrape_url + create_kb_doc loops. */
+const CreateKbFromUrlsSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  urls: z
+    .array(z.string().url())
+    .min(1)
+    .max(50)
+    .describe('Page URLs to ingest (max 50). KB router scrapes them — do not pre-scrape.'),
+  mode: z
+    .enum(['per_url', 'batch'])
+    .optional()
+    .default('per_url')
+    .describe(
+      'per_url: one KB doc per URL (default, best for hotels/multi-page). batch: single KB source with all urls[] (one API call).'
+    ),
+  name: z
+    .string()
+    .optional()
+    .describe('batch: document name. per_url: optional prefix before auto title from URL path.'),
+  tags: z.array(z.string()).optional().describe('Tags applied to created docs'),
+  refreshRate: KbRefreshRateSchema.optional().default('never'),
+  scrapeContent: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Must be true for the KB router to scrape (default true).'),
+  skipExisting: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Skip URLs already present on the agent KB (default true).'),
+  metadata: z
+    .object({ description: z.string() })
+    .optional()
+    .describe('Optional metadata.description for created docs'),
 });
 
 const ListKBDocsSchema = z.object({
@@ -605,7 +649,7 @@ const UpdateKBDocSchema = z.object({
   content: z.string().optional().describe('Updated content'),
   metadata: z.any().optional().describe('Updated metadata'),
   tags: z.array(z.string()).optional().describe('Updated tags'),
-  refreshRate: z.enum(['6h', '12h', '24h', '7d', 'never']).optional().describe('Updated refresh rate'),
+  refreshRate: KbRefreshRateSchema.optional().describe('Updated refresh rate'),
   url: z.string().optional().describe('Updated URL'),
 });
 
@@ -2944,8 +2988,62 @@ const tools: Tool[] = [
   },
   // ==================== KNOWLEDGE BASE TOOLS ====================
   {
+    name: 'create_kb_from_urls',
+    description:
+      'PREFERRED for adding many website pages to an agent KB. Pass up to 50 URLs; the ConvoCore KB router scrapes them (scrapeContent=true). ' +
+      'Do NOT web-fetch/scrape_url then paste content into create_kb_doc — that is slow and duplicates work. ' +
+      'mode=per_url (default): one KB doc per URL. mode=batch: one API call with urls[]. ' +
+      'For a whole site prefer create_kb_doc sourceType=sitemap. Scraping is async — poll list_kb_docs/get_kb_doc for status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID' },
+        urls: {
+          type: 'array',
+          items: { type: 'string', format: 'uri' },
+          minItems: 1,
+          maxItems: 50,
+          description: 'Page URLs to ingest via KB router (max 50)',
+        },
+        mode: {
+          type: 'string',
+          enum: ['per_url', 'batch'],
+          description: 'per_url (default) or batch (single source with all urls)',
+        },
+        name: {
+          type: 'string',
+          description: 'batch: doc name. per_url: optional name prefix',
+        },
+        tags: { type: 'array', items: { type: 'string' } },
+        refreshRate: {
+          type: 'string',
+          enum: ['3d', '7d', 'never'],
+          description: 'Auto re-crawl (API: 3d | 7d | never). Default never.',
+        },
+        scrapeContent: {
+          type: 'boolean',
+          description: 'KB router scrape (default true)',
+        },
+        skipExisting: {
+          type: 'boolean',
+          description: 'Skip URLs already on the agent KB (default true)',
+        },
+        metadata: {
+          type: 'object',
+          properties: { description: { type: 'string' } },
+          required: ['description'],
+        },
+      },
+      required: ['agentId', 'urls'],
+    },
+  },
+  {
     name: 'create_kb_doc',
-    description: 'Add a document to an agent\'s knowledge base (VG agents only)',
+    description:
+      'Add one knowledge base source (VG agents). For many page URLs use create_kb_from_urls instead. ' +
+      'For websites: sourceType=url with urls[] + scrapeContent=true (KB router scrapes). ' +
+      'For whole-site: sourceType=sitemap + sitemapUrl + maxPages + scrapeContent=true. ' +
+      'sourceType=doc only for raw text you already have — do not paste web-fetched HTML here.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2960,7 +3058,7 @@ const tools: Tool[] = [
         sourceType: {
           type: 'string',
           enum: ['doc', 'url', 'sitemap'],
-          description: 'Source type: doc (text content), url (single URL), sitemap (multiple pages)',
+          description: 'doc = text; url = KB router scrape urls[]; sitemap = crawl sitemap',
         },
         content: {
           type: 'string',
@@ -2977,13 +3075,13 @@ const tools: Tool[] = [
         },
         refreshRate: {
           type: 'string',
-          enum: ['6h', '12h', '24h', '7d', 'never'],
-          description: 'Auto-refresh rate (default: never)',
+          enum: ['3d', '7d', 'never'],
+          description: 'Auto re-crawl for URL/sitemap (API: 3d | 7d | never). Default never.',
         },
         urls: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Array of URLs (for sourceType: url)',
+          description: 'Array of URLs (for sourceType: url). Prefer create_kb_from_urls for many pages.',
         },
         sitemapUrl: {
           type: 'string',
@@ -2995,7 +3093,7 @@ const tools: Tool[] = [
         },
         scrapeContent: {
           type: 'boolean',
-          description: 'Whether to scrape content from URLs',
+          description: 'Let KB router scrape URLs/sitemap (set true for url/sitemap)',
         },
       },
       required: ['agentId', 'name', 'sourceType'],
@@ -3074,8 +3172,8 @@ const tools: Tool[] = [
         },
         refreshRate: {
           type: 'string',
-          enum: ['6h', '12h', '24h', '7d', 'never'],
-          description: 'Updated refresh rate',
+          enum: ['3d', '7d', 'never'],
+          description: 'Updated refresh rate (API: 3d | 7d | never)',
         },
         url: {
           type: 'string',
@@ -4375,9 +4473,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ==================== KNOWLEDGE BASE HANDLERS ====================
 
+      case 'create_kb_from_urls': {
+        const validated = CreateKbFromUrlsSchema.parse(args);
+        const result = await getActiveClient().createKbFromUrls(validated.agentId, {
+          urls: validated.urls,
+          mode: validated.mode,
+          name: validated.name,
+          tags: validated.tags,
+          refreshRate: validated.refreshRate,
+          scrapeContent: validated.scrapeContent,
+          skipExisting: validated.skipExisting,
+          metadata: validated.metadata,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       case 'create_kb_doc': {
         const validated = CreateKBDocSchema.parse(args);
         const { agentId, ...kbData } = validated;
+        // Default scrapeContent=true for url/sitemap so agents don't forget KB-router scrape.
+        if (
+          (kbData.sourceType === 'url' || kbData.sourceType === 'sitemap') &&
+          kbData.scrapeContent === undefined
+        ) {
+          kbData.scrapeContent = true;
+        }
         const result = await getActiveClient().createKBDoc(agentId, kbData);
         return {
           content: [

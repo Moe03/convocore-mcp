@@ -44,7 +44,7 @@ const SESSION_IDLE_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : ONE_YEAR_MS;
 })();
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.4.2';
+const PACKAGE_VERSION = '2.5.0';
 const INSTALL_LINKS_PATH = '/v1/install-links';
 
 function resolveRequestSecret(req: IncomingMessage): string | null {

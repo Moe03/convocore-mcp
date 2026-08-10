@@ -218,9 +218,13 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Knowledge base & testing
 
-- KB: \`create_kb_doc\`, \`list_kb_docs\`, \`update_kb_doc\`; content may appear under \`chunks\` in \`get_kb_doc\`. Prefer \`get_kb_docs_bulk\` for many docs.
-- Test agent behavior: \`interact_with_agent\` with \`isTest: true\`; reuse \`convoId\` for multi-turn tests.
-- Scrape a site first: \`scrape_url\` → then \`create_agent_from_template\` or KB URL doc.
+- **Adding many website pages:** \`create_kb_from_urls\` (max 50 URLs). KB router scrapes (\`scrapeContent=true\`). Do **not** web-fetch / \`scrape_url\` then paste into \`create_kb_doc\`.
+- Whole site: \`create_kb_doc\` with \`sourceType=sitemap\`, \`sitemapUrl\`, \`maxPages\`, \`scrapeContent=true\`.
+- Single/manual: \`create_kb_doc\` (\`url\` + \`urls[]\` + scrape, or \`doc\` for raw text you already have).
+- \`refreshRate\` is \`3d\` | \`7d\` | \`never\` (not hourly).
+- Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
+- Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\`.
+- Branding colours/favicon only: \`scrape_url\` is OK. For KB ingest, always use KB router URL/sitemap tools.
 
 ---
 

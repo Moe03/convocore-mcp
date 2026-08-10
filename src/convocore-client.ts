@@ -43,6 +43,60 @@ export type QueryConversationsFilters = {
   hasUserName?: boolean;
 };
 
+/** Normalize URL for KB skipExisting matching (strip hash, lowercase host). */
+export function normalizeKbUrl(raw: string): string {
+  try {
+    const u = new URL(raw.trim());
+    u.hash = '';
+    u.hostname = u.hostname.toLowerCase();
+    if (
+      (u.protocol === 'http:' && u.port === '80') ||
+      (u.protocol === 'https:' && u.port === '443')
+    ) {
+      u.port = '';
+    }
+    let path = u.pathname;
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+    u.pathname = path || '/';
+    return u.toString();
+  } catch {
+    return raw.trim().toLowerCase();
+  }
+}
+
+export function kbDocNameFromUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const parts = u.pathname.split('/').filter(Boolean);
+    const last = parts[parts.length - 1];
+    if (last) {
+      return decodeURIComponent(last)
+        .replace(/[-_]+/g, ' ')
+        .replace(/\.[a-z0-9]+$/i, '')
+        .trim()
+        .slice(0, 120) || u.hostname;
+    }
+    return u.hostname;
+  } catch {
+    return raw.slice(0, 120);
+  }
+}
+
+function collectKbSourceUrls(docs: any[]): Set<string> {
+  const set = new Set<string>();
+  for (const doc of docs) {
+    if (!doc || typeof doc !== 'object') continue;
+    if (typeof doc.url === 'string') set.add(normalizeKbUrl(doc.url));
+    if (typeof doc.sourceUrl === 'string') set.add(normalizeKbUrl(doc.sourceUrl));
+    if (Array.isArray(doc.urls)) {
+      for (const u of doc.urls) {
+        if (typeof u === 'string') set.add(normalizeKbUrl(u));
+      }
+    }
+  }
+  return set;
+}
+
 export class ConvoCoreApiRequestError extends Error {
   status?: number;
   endpoint: string;
@@ -835,6 +889,190 @@ export class ConvoCoreClient {
    */
   async getKBStats(agentId: string): Promise<any> {
     return this.request<any>(`/agents/${agentId}/kb/stats`);
+  }
+
+  /**
+   * List all KB docs across pages (bounded). Used for skipExisting on URL sync.
+   */
+  async listAllKBDocs(
+    agentId: string,
+    options?: { maxDocs?: number; pageSize?: number }
+  ): Promise<any[]> {
+    const maxDocs = Math.min(Math.max(options?.maxDocs ?? 500, 1), 2000);
+    const pageSize = Math.min(Math.max(options?.pageSize ?? 50, 1), 100);
+    const docs: any[] = [];
+    let page = 1;
+    while (docs.length < maxDocs) {
+      const raw = await this.listKBDocs(agentId, page, pageSize);
+      const batch = Array.isArray(raw?.data)
+        ? raw.data
+        : Array.isArray(this.unwrapData(raw))
+          ? (this.unwrapData(raw) as any[])
+          : [];
+      if (batch.length === 0) break;
+      docs.push(...batch);
+      const totalPages =
+        typeof raw?.totalPages === 'number' ? raw.totalPages : undefined;
+      if (totalPages != null && page >= totalPages) break;
+      if (batch.length < pageSize) break;
+      page += 1;
+    }
+    return docs.slice(0, maxDocs);
+  }
+
+  /**
+   * Mass-add URL sources via the KB router (server scrapes — do not pre-scrape).
+   * - mode=batch: one POST with urls[] (API docs example)
+   * - mode=per_url: fan-out one KB doc per URL (better for named hotel/page sources)
+   */
+  async createKbFromUrls(
+    agentId: string,
+    input: {
+      urls: string[];
+      mode?: 'batch' | 'per_url';
+      name?: string;
+      tags?: string[];
+      refreshRate?: '3d' | '7d' | 'never';
+      scrapeContent?: boolean;
+      skipExisting?: boolean;
+      metadata?: { description: string };
+    }
+  ): Promise<{
+    agentId: string;
+    mode: 'batch' | 'per_url';
+    requested: number;
+    skippedExisting: string[];
+    submitted: number;
+    succeeded: Array<{ url?: string; name: string; result: unknown }>;
+    failed: Array<{ id: string; error: string }>;
+    note: string;
+  }> {
+    const mode = input.mode ?? 'per_url';
+    const scrapeContent = input.scrapeContent !== false;
+    const refreshRate = input.refreshRate ?? 'never';
+    const tags = input.tags;
+    const metadata = input.metadata;
+
+    const uniqueUrls = [
+      ...new Set(
+        input.urls
+          .map((u) => (typeof u === 'string' ? u.trim() : ''))
+          .filter((u) => {
+            try {
+              void new URL(u);
+              return true;
+            } catch {
+              return false;
+            }
+          })
+      ),
+    ];
+
+    let urls = uniqueUrls;
+    const skippedExisting: string[] = [];
+    if (input.skipExisting && urls.length > 0) {
+      const existingDocs = await this.listAllKBDocs(agentId);
+      const existing = collectKbSourceUrls(existingDocs);
+      const next: string[] = [];
+      for (const u of urls) {
+        if (existing.has(normalizeKbUrl(u))) {
+          skippedExisting.push(u);
+        } else {
+          next.push(u);
+        }
+      }
+      urls = next;
+    }
+
+    const note =
+      'KB router scrapes asynchronously. Poll get_kb_doc / list_kb_docs for status; do not re-scrape with scrape_url or web fetch.';
+
+    if (urls.length === 0) {
+      return {
+        agentId,
+        mode,
+        requested: uniqueUrls.length,
+        skippedExisting,
+        submitted: 0,
+        succeeded: [],
+        failed: [],
+        note,
+      };
+    }
+
+    if (mode === 'batch') {
+      const name = (input.name?.trim() || 'Website pages').slice(0, 200);
+      try {
+        const result = await this.createKBDoc(agentId, {
+          name,
+          sourceType: 'url',
+          urls,
+          scrapeContent,
+          refreshRate,
+          ...(tags ? { tags } : {}),
+          ...(metadata ? { metadata } : {}),
+        });
+        return {
+          agentId,
+          mode,
+          requested: uniqueUrls.length,
+          skippedExisting,
+          submitted: urls.length,
+          succeeded: [{ name, result }],
+          failed: [],
+          note,
+        };
+      } catch (err) {
+        return {
+          agentId,
+          mode,
+          requested: uniqueUrls.length,
+          skippedExisting,
+          submitted: urls.length,
+          succeeded: [],
+          failed: [
+            {
+              id: name,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          ],
+          note,
+        };
+      }
+    }
+
+    const prefix = input.name?.trim();
+    const batch = await mapWithConcurrency(
+      urls,
+      async (url) => {
+        const name = (prefix
+          ? `${prefix} — ${kbDocNameFromUrl(url)}`
+          : kbDocNameFromUrl(url)
+        ).slice(0, 200);
+        const result = await this.createKBDoc(agentId, {
+          name,
+          sourceType: 'url',
+          urls: [url],
+          scrapeContent,
+          refreshRate,
+          ...(tags ? { tags } : {}),
+          ...(metadata ? { metadata } : {}),
+        });
+        return { url, name, result };
+      },
+      { getId: (url) => url }
+    );
+
+    return {
+      agentId,
+      mode,
+      requested: uniqueUrls.length,
+      skippedExisting,
+      submitted: urls.length,
+      succeeded: batch.succeeded,
+      failed: batch.failed,
+      note,
+    };
   }
 
   // ==================== CRAWLER METHODS ====================
