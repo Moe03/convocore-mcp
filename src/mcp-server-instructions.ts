@@ -10,6 +10,24 @@ export function widgetRegionFromApiRegion(apiRegion: 'eu-gcp' | 'na-gcp'): 'eu' 
   return apiRegion === 'na-gcp' ? 'na' : 'eu';
 }
 
+/**
+ * Public try-it demo URL for an agent (NOT the dashboard /agents/ route).
+ * Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}
+ */
+export function buildPrototypeAgentUrl(
+  agentId: string,
+  apiRegion: 'eu-gcp' | 'na-gcp' | 'eu' | 'na' = 'eu-gcp'
+): string {
+  const id = agentId.trim();
+  const region =
+    apiRegion === 'na' || apiRegion === 'na-gcp'
+      ? 'na'
+      : apiRegion === 'eu' || apiRegion === 'eu-gcp'
+        ? 'eu'
+        : widgetRegionFromApiRegion(apiRegion);
+  return `https://app.convocore.ai/${region}/prototype/${encodeURIComponent(id)}`;
+}
+
 export function buildWidgetEmbedSnippet(options: {
   agentId: string;
   region: 'eu' | 'na';
@@ -80,6 +98,23 @@ export default function VoicePage() {
 export const MCP_SERVER_INSTRUCTIONS = `# ConvoCore MCP — usage guide
 
 You manage ConvoCore AI agents via this MCP. Follow these rules so integrations work without mistakes.
+
+## CRITICAL — public "try the agent" / prototype demo link
+
+After creating or fetching an agent, **always give the user a clickable prototype URL** so they can try the agent in the browser.
+
+**Correct pattern only:**
+\`https://app.convocore.ai/{region}/prototype/{agentID}\`
+
+- \`region\` is \`eu\` or \`na\` (from API region: \`eu-gcp\` → \`eu\`, \`na-gcp\` → \`na\`).
+- Example: \`https://app.convocore.ai/eu/prototype/6TUWPdhWvPPssnca5z78\`
+
+**Never invent these (they are wrong):**
+- \`https://app.convocore.ai/agents/...\`
+- \`/app/agents/...\`
+- bare dashboard edit URLs as the "try it" link
+
+Tool responses include \`prototypeUrl\` / \`tryItUrl\` when available — **copy that exact URL** into your reply. Do not reconstruct a different path.
 
 ## CRITICAL — "deploy to website" / "embed code" / "widget script"
 
@@ -230,6 +265,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Quick decision tree
 
+- **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
 - **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` → then embed tool) → paste \`html\` in reply.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.

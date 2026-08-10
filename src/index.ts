@@ -39,6 +39,7 @@ import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
 import {
   MCP_SERVER_INSTRUCTIONS,
+  buildPrototypeAgentUrl,
   buildVoiceSdkExample,
   buildWidgetEmbedSnippet,
   widgetRegionFromApiRegion,
@@ -46,6 +47,43 @@ import {
 } from './mcp-server-instructions.js';
 
 const execAsync = promisify(exec);
+
+/** Public try-it links for tool payloads (eu|na + /prototype/{id}). */
+function prototypeLinksForAgent(agentId: string | null | undefined): {
+  region: 'eu' | 'na';
+  prototypeUrl: string | null;
+  tryItUrl: string | null;
+} {
+  const region = widgetRegionFromApiRegion(getActiveConfig().apiRegion);
+  const id = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!id) {
+    return { region, prototypeUrl: null, tryItUrl: null };
+  }
+  const prototypeUrl = buildPrototypeAgentUrl(id, region);
+  return { region, prototypeUrl, tryItUrl: prototypeUrl };
+}
+
+function extractAgentIdFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const root = payload as Record<string, unknown>;
+  const data =
+    root.data && typeof root.data === 'object'
+      ? (root.data as Record<string, unknown>)
+      : root;
+  for (const key of ['ID', 'id', 'agentId'] as const) {
+    const v = data[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  const nested = data.agent;
+  if (nested && typeof nested === 'object') {
+    const agent = nested as Record<string, unknown>;
+    for (const key of ['ID', 'id'] as const) {
+      const v = agent[key];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+  }
+  return null;
+}
 
 // Initialize stdio/default API client when WORKSPACE_SECRET is set (stdio / optional hosted fallback).
 if (process.env.WORKSPACE_SECRET) {
@@ -1797,14 +1835,17 @@ async function createAgentFromTemplateFlow(args: z.infer<typeof CreateAgentFromT
   return runTemplateIdempotent(idempotencyKey, async () => {
     const existing = await resolveExistingTemplateAgentByIdempotencyKey(idempotencyKey);
     if (existing) {
+      const links = prototypeLinksForAgent(existing.agentId);
       return {
         success: true,
-        message:
-          'create_agent_from_template idempotency hit: returning previously created agent for this request.',
+        message: `create_agent_from_template idempotency hit. Send the user this try-it link: ${links.prototypeUrl}`,
         data: {
           stage: 'idempotency_hit',
           idempotencyKey,
           agentId: existing.agentId,
+          ...links,
+          note:
+            'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}.',
           agent: existing.agent,
           warning:
             'This request was already fulfilled. Returning the existing agent to prevent duplicate creation.',
@@ -2166,15 +2207,19 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     }
   }
 
+  const links = prototypeLinksForAgent(createdAgentId);
   return {
     success: !!createdAgentId,
     message: createdAgentId
-      ? 'create_agent_from_template completed successfully. Full agent payload included in data.agent.'
+      ? `create_agent_from_template completed successfully. Send the user this try-it link: ${links.prototypeUrl}`
       : 'create_agent_from_template did not return an agent ID from createAgent response.',
     data: {
       stage: createdAgentId ? 'done' : stage,
       workspaceId: resolvedWorkspaceId,
       agentId: createdAgentId ?? null,
+      ...links,
+      note:
+        'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}.',
       agent: fullAgent ?? (result as any)?.data ?? result,
       createResponse: result,
       platformRepair,
@@ -2257,7 +2302,8 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, and vg_* overrides are blocked from additionalConfig.',
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, and vg_* overrides are blocked from additionalConfig. ' +
+      'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2344,7 +2390,8 @@ const tools: Tool[] = [
   {
     name: 'get_agent',
     description:
-      'Retrieve details of a specific ConvoCore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only.',
+      'Retrieve details of a specific ConvoCore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only. ' +
+      'Response includes prototypeUrl / tryItUrl — share that public demo with the user (https://app.convocore.ai/{eu|na}/prototype/{agentId}). Never invent /agents/ links.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4073,11 +4120,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const result = await getActiveClient().createAgent(payload);
+        const agentId = extractAgentIdFromPayload(result);
+        const links = prototypeLinksForAgent(agentId);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(
+                {
+                  ...((result && typeof result === 'object') ? result : { result }),
+                  agentId,
+                  ...links,
+                  note:
+                    'Send the user prototypeUrl to try the agent. Never use /agents/{id}.',
+                },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -4129,11 +4188,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'get_agent': {
         const validated = GetAgentSchema.parse(args);
         const result = await getActiveClient().getAgent(validated.agentId);
+        const agentId =
+          extractAgentIdFromPayload(result) ?? validated.agentId;
+        const links = prototypeLinksForAgent(agentId);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(
+                {
+                  ...((result && typeof result === 'object') ? result : { result }),
+                  agentId,
+                  ...links,
+                  note:
+                    'Public try-it link is prototypeUrl (…/prototype/{agentId}). Never invent /agents/{id}.',
+                },
+                null,
+                2
+              ),
             },
           ],
         };
