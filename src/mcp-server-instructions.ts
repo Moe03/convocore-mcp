@@ -259,7 +259,8 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - \`refreshRate\` is \`3d\` | \`7d\` | \`never\` (not hourly).
 - Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
 - Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\`.
-- Branding colours/favicon only: \`scrape_url\` is OK. For KB ingest, always use KB router URL/sitemap tools.
+- **Validate links/images** (status 200/404, broken CDN, logo URLs): \`scrape_url\` with \`mode: "check"\` + \`urls: [...]\` (default mode). Fast ping — not a full scrape.
+- Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
 
 ---
 

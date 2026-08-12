@@ -314,7 +314,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `update_kb_doc` | PATCH | `/agents/{agentId}/kb/{docId}` |
 | `delete_kb_doc` | DELETE | `/agents/{agentId}/kb/{docId}` |
 | `get_kb_stats` | GET | `/agents/{agentId}/kb/stats` |
-| `scrape_url` | POST/GET | Submits one URL for scraping, waits for completion, then returns the scraped page result |
+| `scrape_url` | HTTP ping or crawler | `mode=check` (default): fast status for up to 20 URLs/images; `mode=scrape`: full page scrape (1 URL) |
 | `interact_with_agent` | WSS | `wss://{region}-gcp-api.vg-stuff.com/interact` (single `InteractObject` in, streamed `ChunkMessage`s out) |
 | `get_ui_engine_spec` | n/a | Static reference — does not hit the API |
 
@@ -405,7 +405,9 @@ Optional: `metadata`, `tags`, `refreshRate` — `3d` | `7d` | `never` (default `
 
 ### Scrape tool
 
-**`scrape_url`** — Required: `url`. Workspace is resolved internally by MCP (no `workspaceId` input). Scrapes exactly one URL, does not follow discovered links, waits up to 120 seconds for completion, then returns the job state plus the first scraped page payload when available.
+**`scrape_url`** — Provide `url` and/or `urls` (max **20**).  
+- **`mode: "check"` (default):** fast HTTP ping — status (200/404/…), `ok`, content-type, final URL after redirects. Use to verify images, logos, and page links before wiring them into an agent.  
+- **`mode: "scrape"`:** full ConvoCore crawler scrape of **one** URL (waits up to ~120s) for text/colours/favicon. Workspace resolved internally. Not for KB ingest (`create_kb_from_urls`).
 
 ### Interact (WebSocket) tool
 
@@ -513,7 +515,8 @@ After configuration, users can ask their assistant things like:
 - “Export all conversations for agent … as CSV” → `export_all_conversations`
 - “Add many hotel/site pages to the KB” → `create_kb_from_urls` (KB router scrapes; do not web-fetch first)
 - “Add one URL / sitemap to the KB” → `create_kb_doc` with `sourceType: url|sitemap` + `scrapeContent: true`
-- “Scrape one URL for branding (colours/favicon)” → `scrape_url`
+- “Are these image/page links dead?” → `scrape_url` with `mode: "check"` + `urls: [...]`
+- “Scrape one URL for branding (colours/favicon)” → `scrape_url` with `mode: "scrape"`
 
 Exact tool choice and arguments are up to the host model; the **tool descriptions** in `src/index.ts` are what the model sees.
 

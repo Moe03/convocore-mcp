@@ -45,6 +45,7 @@ import {
   widgetRegionFromApiRegion,
   type WidgetEmbedMode,
 } from './mcp-server-instructions.js';
+import { checkUrls } from './url-check.js';
 
 const execAsync = promisify(exec);
 
@@ -702,9 +703,44 @@ const GetKBStatsSchema = z.object({
 
 // ==================== SCRAPE SCHEMAS ====================
 
-const ScrapeUrlSchema = z.object({
-  url: z.string().url().describe('The single URL to scrape'),
-});
+const ScrapeUrlSchema = z
+  .object({
+    url: z.string().url().optional().describe('Single URL (alias for urls with one entry)'),
+    urls: z
+      .array(z.string().url())
+      .min(1)
+      .max(20)
+      .optional()
+      .describe('One or more URLs to check or scrape (max 20). Prefer for link/image validation.'),
+    mode: z
+      .enum(['check', 'scrape'])
+      .optional()
+      .default('check')
+      .describe(
+        'check (default): fast HTTP status ping (200/404/etc) for pages/images — no crawler. scrape: full ConvoCore page scrape (content/colours/favicon); use one URL.'
+      ),
+  })
+  .superRefine((data, ctx) => {
+    const list = [
+      ...(data.urls ?? []),
+      ...(data.url ? [data.url] : []),
+    ];
+    const unique = [...new Set(list.map((u) => u.trim()).filter(Boolean))];
+    if (unique.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['urls'],
+        message: 'Provide url or urls (at least one).',
+      });
+    }
+    if ((data.mode ?? 'check') === 'scrape' && unique.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['urls'],
+        message: 'mode=scrape supports exactly one URL. Use mode=check for multiple links.',
+      });
+    }
+  });
 
 // ==================== FILE I/O SCHEMAS ====================
 // One-of source: { path } | { url } | { data + mimeType? }. Validated at runtime.
@@ -3265,17 +3301,33 @@ const tools: Tool[] = [
   // ==================== SCRAPE TOOL ====================
   {
     name: 'scrape_url',
-    description: 'Scrape exactly one URL and wait for the scrape result before returning. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. This tool does not follow discovered links and does not expose job options.',
+    description:
+      'Validate and/or scrape HTTP(S) URLs. ' +
+      'DEFAULT mode=check: fast ping of one or many links/images (up to 20) — returns status (200/301/404/etc), ok, content-type, final URL after redirects. Use this to verify widget images, logos, CDN assets, booking links, or any URL before putting it on an agent. ' +
+      'mode=scrape: full ConvoCore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. ' +
+      'Do NOT use scrape for KB ingest (use create_kb_from_urls). Workspace is resolved internally — never pass workspaceId.',
     inputSchema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
           format: 'uri',
-          description: 'The single URL to scrape',
+          description: 'Single URL (optional if urls is set)',
+        },
+        urls: {
+          type: 'array',
+          items: { type: 'string', format: 'uri' },
+          minItems: 1,
+          maxItems: 20,
+          description: 'URLs to check (preferred for validating multiple image/page links)',
+        },
+        mode: {
+          type: 'string',
+          enum: ['check', 'scrape'],
+          description:
+            'check = HTTP status ping (default). scrape = full page scrape (one URL only).',
         },
       },
-      required: ['url'],
     },
   },
   // ==================== WEBSITE EMBED + WIDGET CSS TOOLS ====================
@@ -4679,13 +4731,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'scrape_url': {
         const validated = ScrapeUrlSchema.parse(args);
+        const urlList = [
+          ...new Set(
+            [...(validated.urls ?? []), ...(validated.url ? [validated.url] : [])]
+              .map((u) => u.trim())
+              .filter(Boolean)
+          ),
+        ];
+        const mode = validated.mode ?? 'check';
+
+        if (mode === 'check') {
+          const checked = await checkUrls(urlList);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    mode: 'check',
+                    message:
+                      'HTTP validity check (not a full scrape). ok=true means 2xx/3xx. Use mode=scrape for page content/colours.',
+                    ...checked,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
         const resolvedWorkspaceId = await resolveWorkspaceId();
-        const result = await getActiveClient().scrapeUrl(resolvedWorkspaceId, validated.url);
+        const result = await getActiveClient().scrapeUrl(resolvedWorkspaceId, urlList[0]);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ mode: 'scrape', ...result }, null, 2),
             },
           ],
         };
