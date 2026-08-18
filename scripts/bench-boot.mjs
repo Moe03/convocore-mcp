@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cold-start benchmark for the ConvoCore MCP server.
+ * Cold-start benchmark for the Convocore MCP server.
  * Spawns `node dist/index.js` and measures wall time until the server
  * prints its "running on stdio" line on stderr (i.e. fully initialized).
  */
@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
 const RUNS = Number(process.argv[2] || 3);
-const READY_LINE = 'ConvoCore MCP Server running on stdio';
+const READY_LINE = 'Convocore MCP Server running on stdio';
 
 async function bootOnce() {
   return new Promise((resolve, reject) => {

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * ConvoCore MCP Server
- * Provides Model Context Protocol tools for managing ConvoCore AI agents
+ * Convocore MCP Server
+ * Provides Model Context Protocol tools for managing Convocore AI agents
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
-import { ConvoCoreApiRequestError, ConvoCoreClient } from './convocore-client.js';
+import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
 import {
   getActiveClient,
   getActiveConfig,
@@ -33,10 +33,19 @@ import {
   computeTemplateIdempotencyKey,
   runTemplateIdempotent,
 } from './template-idempotency.js';
-import { TEMPLATE_START_NODE_DEFAULTS, normalizeTemplateStartNodeArray } from './template-start-node.js';
+import {
+  FALLBACK_CHAT_MODEL_ID,
+  RECOMMENDED_CHAT_MODEL_ID,
+  TEMPLATE_START_NODE_DEFAULTS,
+  normalizeTemplateStartNodeArray,
+} from './template-start-node.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
+import {
+  applyExactStringReplace,
+  unwrapRecord,
+} from './text-patch.js';
 import {
   MCP_SERVER_INSTRUCTIONS,
   buildPrototypeAgentUrl,
@@ -89,7 +98,7 @@ function extractAgentIdFromPayload(payload: unknown): string | null {
 // Initialize stdio/default API client when WORKSPACE_SECRET is set (stdio / optional hosted fallback).
 if (process.env.WORKSPACE_SECRET) {
   const defaultConfig = getConfig();
-  initDefaultRequestContext(new ConvoCoreClient(defaultConfig), defaultConfig);
+  initDefaultRequestContext(new ConvocoreClient(defaultConfig), defaultConfig);
 }
 const templateIdempotencyStore = new TemplateIdempotencyStore();
 
@@ -692,6 +701,66 @@ const UpdateKBDocSchema = z.object({
   url: z.string().optional().describe('Updated URL'),
 });
 
+const PatchAgentPromptSchema = z.object({
+  agentId: z.string().describe('The agent ID whose prompt to patch'),
+  old_string: z
+    .string()
+    .min(1)
+    .describe(
+      'Exact text to find in the prompt (whitespace-sensitive). Include enough surrounding context so the match is unique unless replace_all is true.'
+    ),
+  new_string: z
+    .string()
+    .describe('Replacement text. May be empty to delete the matched span.'),
+  replace_all: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'If true, replace every occurrence of old_string. If false (default), fails when old_string matches more than once.'
+    ),
+  target: z
+    .enum(['auto', 'nodes0', 'vg_instructions', 'vg_systemPrompt', 'proactiveMessage', 'customCSS'])
+    .optional()
+    .default('auto')
+    .describe(
+      'Which field to patch. auto = nodes[0].instructions when enableNodes/nodes exist, else vg_instructions. Use customCSS for widget CSS surgical edits.'
+    ),
+  sync_mirrors: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'When patching the main prompt (auto/nodes0/vg_*), also apply the same exact replace to the other main prompt mirrors (nodes[0].instructions, vg_instructions, vg_systemPrompt) when they contain old_string. Default true.'
+    ),
+});
+
+const PatchKbDocSchema = z.object({
+  agentId: z.string().describe('The agent ID'),
+  docId: z.string().describe('The KB document ID'),
+  old_string: z
+    .string()
+    .min(1)
+    .describe(
+      'Exact text to find in the KB field (whitespace-sensitive). Include enough surrounding context so the match is unique unless replace_all is true.'
+    ),
+  new_string: z
+    .string()
+    .describe('Replacement text. May be empty to delete the matched span.'),
+  replace_all: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'If true, replace every occurrence of old_string. If false (default), fails when old_string matches more than once.'
+    ),
+  field: z
+    .enum(['content', 'name'])
+    .optional()
+    .default('content')
+    .describe('Which KB field to patch. Default content (the document body).'),
+});
+
 const DeleteKBDocSchema = z.object({
   agentId: z.string().describe('The agent ID'),
   docId: z.string().describe('The document ID'),
@@ -717,7 +786,7 @@ const ScrapeUrlSchema = z
       .optional()
       .default('check')
       .describe(
-        'check (default): fast HTTP status ping (200/404/etc) for pages/images — no crawler. scrape: full ConvoCore page scrape (content/colours/favicon); use one URL.'
+        'check (default): fast HTTP status ping (200/404/etc) for pages/images — no crawler. scrape: full Convocore page scrape (content/colours/favicon); use one URL.'
       ),
   })
   .superRefine((data, ctx) => {
@@ -812,7 +881,7 @@ const UpdateAgentCustomCssSchema = z.object({
 });
 
 const GetWebsiteEmbedCodeSchema = z.object({
-  agentId: z.string().describe('The ConvoCore agent ID to embed (from get_agent or dashboard URL).'),
+  agentId: z.string().describe('The Convocore agent ID to embed (from get_agent or dashboard URL).'),
   mode: z
     .enum(['popup-bottom-right', 'popup-bottom-left', 'full-width', 'modal', 'voice-react'])
     .optional()
@@ -1227,7 +1296,7 @@ const AgentVoiceConfigInputSchema = {
   additionalProperties: true,
 } as const;
 
-const DEFAULT_MODEL_FOR_TEMPLATE_AGENTS = 'zai-org/GLM-5';
+const DEFAULT_MODEL_FOR_TEMPLATE_AGENTS = RECOMMENDED_CHAT_MODEL_ID;
 
 const DEFAULT_GEMINI_LIVE_OPTIONS = {
   apiConfig: { apiKey: '' },
@@ -1295,6 +1364,17 @@ function normalizeTemplateAgentNodesForCreate(nodes: unknown): unknown[] {
     console.error(
       `[debug] create_agent_from_template normalized start node at index ${normalized.startNodeIndex}; autoFilledFields=${normalized.patchedFields.join(',')}`
     );
+  }
+  const start = normalized.nodes[normalized.startNodeIndex];
+  if (start && typeof start === 'object') {
+    const node = start as Record<string, unknown>;
+    const llm =
+      node.llmConfig && typeof node.llmConfig === 'object'
+        ? { ...(node.llmConfig as Record<string, unknown>) }
+        : {};
+    llm.modelId = DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
+    node.llmConfig = llm;
+    normalized.nodes[normalized.startNodeIndex] = node;
   }
   return normalized.nodes;
 }
@@ -1408,6 +1488,263 @@ async function resolveWorkspaceId(): Promise<string> {
   throw new Error(
     'Could not auto-detect workspaceId from workspace secret context. Set CONVOCORE_WORKSPACE_ID in MCP config.'
   );
+}
+
+type AgentPromptTarget =
+  | 'auto'
+  | 'nodes0'
+  | 'vg_instructions'
+  | 'vg_systemPrompt'
+  | 'proactiveMessage'
+  | 'customCSS';
+
+function resolveCanonicalPromptTarget(agent: Record<string, any>): 'nodes0' | 'vg_instructions' {
+  const nodes = Array.isArray(agent.nodes) ? agent.nodes : null;
+  const enableNodes = agent.enableNodes === true || (nodes != null && nodes.length > 0);
+  if (enableNodes && nodes && nodes[0] && typeof nodes[0] === 'object') {
+    return 'nodes0';
+  }
+  return 'vg_instructions';
+}
+
+function readAgentTextField(
+  agent: Record<string, any>,
+  target: Exclude<AgentPromptTarget, 'auto'>
+): { text: string; label: string } {
+  if (target === 'nodes0') {
+    const nodes = Array.isArray(agent.nodes) ? agent.nodes : [];
+    const first = nodes[0] && typeof nodes[0] === 'object' ? nodes[0] : null;
+    const text = typeof first?.instructions === 'string' ? first.instructions : '';
+    return { text, label: 'nodes[0].instructions' };
+  }
+  if (target === 'vg_instructions') {
+    return {
+      text: typeof agent.vg_instructions === 'string' ? agent.vg_instructions : '',
+      label: 'vg_instructions',
+    };
+  }
+  if (target === 'vg_systemPrompt') {
+    return {
+      text: typeof agent.vg_systemPrompt === 'string' ? agent.vg_systemPrompt : '',
+      label: 'vg_systemPrompt',
+    };
+  }
+  if (target === 'proactiveMessage') {
+    return {
+      text: typeof agent.proactiveMessage === 'string' ? agent.proactiveMessage : '',
+      label: 'proactiveMessage',
+    };
+  }
+  return {
+    text: typeof agent.customCSS === 'string' ? agent.customCSS : '',
+    label: 'customCSS',
+  };
+}
+
+function applyPatchToAgentObject(
+  agent: Record<string, any>,
+  target: Exclude<AgentPromptTarget, 'auto'>,
+  updatedText: string
+): Record<string, any> {
+  const patch: Record<string, any> = {};
+  if (target === 'nodes0') {
+    const nodes = Array.isArray(agent.nodes)
+      ? agent.nodes.map((n: any) => (n && typeof n === 'object' ? { ...n } : n))
+      : [];
+    if (nodes.length === 0) {
+      nodes.push({ name: 'Start', type: 'start', instructions: updatedText });
+    } else {
+      nodes[0] = { ...(nodes[0] || {}), instructions: updatedText };
+    }
+    patch.nodes = nodes;
+    return patch;
+  }
+  if (target === 'vg_instructions') {
+    patch.vg_instructions = updatedText;
+    return patch;
+  }
+  if (target === 'vg_systemPrompt') {
+    patch.vg_systemPrompt = updatedText;
+    return patch;
+  }
+  if (target === 'proactiveMessage') {
+    patch.proactiveMessage = updatedText;
+    return patch;
+  }
+  patch.customCSS = updatedText;
+  return patch;
+}
+
+const MAIN_PROMPT_TARGETS: Array<'nodes0' | 'vg_instructions' | 'vg_systemPrompt'> = [
+  'nodes0',
+  'vg_instructions',
+  'vg_systemPrompt',
+];
+
+async function patchAgentPromptExact(args: {
+  agentId: string;
+  old_string: string;
+  new_string: string;
+  replace_all: boolean;
+  target: AgentPromptTarget;
+  sync_mirrors: boolean;
+}): Promise<Record<string, unknown>> {
+  const raw = await getActiveClient().getAgent(args.agentId);
+  const agent = unwrapRecord(raw);
+  if (!agent || Object.keys(agent).length === 0) {
+    throw new Error(`Agent ${args.agentId} not found or returned empty payload`);
+  }
+
+  const primaryTarget =
+    args.target === 'auto' ? resolveCanonicalPromptTarget(agent) : args.target;
+  const primary = readAgentTextField(agent, primaryTarget);
+  if (!primary.text) {
+    throw new Error(
+      `Target field ${primary.label} is empty or missing on agent ${args.agentId}. ` +
+        'Re-check with get_agent, or pass an explicit target.'
+    );
+  }
+
+  const primaryResult = applyExactStringReplace(
+    primary.text,
+    args.old_string,
+    args.new_string,
+    args.replace_all
+  );
+  if (!primaryResult.ok) {
+    throw new Error(`${primary.label}: ${primaryResult.error}`);
+  }
+
+  let workingAgent: Record<string, any> = { ...agent };
+  const agentPatch = applyPatchToAgentObject(
+    workingAgent,
+    primaryTarget,
+    primaryResult.updated
+  );
+  workingAgent = { ...workingAgent, ...agentPatch };
+  if (agentPatch.nodes) workingAgent.nodes = agentPatch.nodes;
+
+  const patchedFields: Array<{ field: string; occurrences: number }> = [
+    { field: primary.label, occurrences: primaryResult.occurrences },
+  ];
+
+  const shouldSync =
+    args.sync_mirrors &&
+    (primaryTarget === 'nodes0' ||
+      primaryTarget === 'vg_instructions' ||
+      primaryTarget === 'vg_systemPrompt');
+
+  if (shouldSync) {
+    for (const mirror of MAIN_PROMPT_TARGETS) {
+      if (mirror === primaryTarget) continue;
+      const current = readAgentTextField(workingAgent, mirror);
+      if (!current.text || !current.text.includes(args.old_string)) continue;
+      const mirrorResult = applyExactStringReplace(
+        current.text,
+        args.old_string,
+        args.new_string,
+        args.replace_all
+      );
+      if (!mirrorResult.ok) continue;
+      const mirrorPatch = applyPatchToAgentObject(
+        workingAgent,
+        mirror,
+        mirrorResult.updated
+      );
+      workingAgent = { ...workingAgent, ...mirrorPatch };
+      if (mirrorPatch.nodes) workingAgent.nodes = mirrorPatch.nodes;
+      Object.assign(agentPatch, mirrorPatch);
+      patchedFields.push({
+        field: current.label,
+        occurrences: mirrorResult.occurrences,
+      });
+    }
+  }
+
+  const result = await getActiveClient().updateAgent(args.agentId, {
+    agent: agentPatch,
+  });
+
+  return {
+    success: true,
+    message: `Patched ${patchedFields.map((f) => f.field).join(', ')}`,
+    agentId: args.agentId,
+    target: primaryTarget,
+    patchedFields,
+    replace_all: args.replace_all,
+    old_string_length: args.old_string.length,
+    new_string_length: args.new_string.length,
+    preview: {
+      beforeExcerpt: primary.text.slice(0, 240),
+      afterExcerpt: primaryResult.updated.slice(0, 240),
+    },
+    result,
+  };
+}
+
+async function patchKbDocExact(args: {
+  agentId: string;
+  docId: string;
+  old_string: string;
+  new_string: string;
+  replace_all: boolean;
+  field: 'content' | 'name';
+}): Promise<Record<string, unknown>> {
+  const raw = await getActiveClient().getKBDoc(args.agentId, args.docId);
+  const doc = unwrapRecord(raw);
+  const current =
+    args.field === 'name'
+      ? typeof doc.name === 'string'
+        ? doc.name
+        : ''
+      : typeof doc.content === 'string'
+        ? doc.content
+        : typeof doc.text === 'string'
+          ? doc.text
+          : '';
+
+  if (!current) {
+    throw new Error(
+      `KB doc ${args.docId} field "${args.field}" is empty or missing. Re-read with get_kb_doc (ensure content is present).`
+    );
+  }
+
+  const patched = applyExactStringReplace(
+    current,
+    args.old_string,
+    args.new_string,
+    args.replace_all
+  );
+  if (!patched.ok) {
+    throw new Error(`${args.field}: ${patched.error}`);
+  }
+
+  const payload =
+    args.field === 'name'
+      ? { name: patched.updated }
+      : { content: patched.updated };
+  const result = await getActiveClient().updateKBDoc(
+    args.agentId,
+    args.docId,
+    payload
+  );
+
+  return {
+    success: true,
+    message: `Patched KB ${args.field}`,
+    agentId: args.agentId,
+    docId: args.docId,
+    field: args.field,
+    occurrences: patched.occurrences,
+    replace_all: args.replace_all,
+    old_string_length: args.old_string.length,
+    new_string_length: args.new_string.length,
+    preview: {
+      beforeExcerpt: current.slice(0, 240),
+      afterExcerpt: patched.updated.slice(0, 240),
+    },
+    result,
+  };
 }
 
 function extractScrapedText(scrapeResult: any): string {
@@ -1745,7 +2082,7 @@ function sanitizeTemplateAdditionalConfig(
 }
 
 function normalizeToolError(error: unknown, fallbackStage: string, extra: Record<string, unknown> = {}) {
-  if (error instanceof ConvoCoreApiRequestError) {
+  if (error instanceof ConvocoreApiRequestError) {
     return {
       success: false,
       message: error.message,
@@ -1811,7 +2148,7 @@ function normalizeToolError(error: unknown, fallbackStage: string, extra: Record
 }
 
 function normalizeErrorDetails(error: unknown) {
-  if (error instanceof ConvoCoreApiRequestError) {
+  if (error instanceof ConvocoreApiRequestError) {
     return {
       errorType: 'api_request_error',
       message: error.message,
@@ -2254,8 +2591,10 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
       workspaceId: resolvedWorkspaceId,
       agentId: createdAgentId ?? null,
       ...links,
+      recommendedModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+      fallbackModel: FALLBACK_CHAT_MODEL_ID,
       note:
-        'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}.',
+        'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}. New agents use gpt-5.6-luna.',
       agent: fullAgent ?? (result as any)?.data ?? result,
       createResponse: result,
       platformRepair,
@@ -2272,7 +2611,8 @@ const tools: Tool[] = [
   {
     name: 'create_agent',
     description:
-      'Create a new ConvoCore AI agent directly from supplied fields (legacy/raw mode). For new branded chat+voice agents, use scrape_url + create_agent_from_template with explicit prompts and voiceConfig. Use this tool only for manual/advanced direct payload control.',
+      'Create a new Convocore AI agent directly from supplied fields (legacy/raw mode). For new branded chat+voice agents, use scrape_url + create_agent_from_template with explicit prompts and voiceConfig. Use this tool only for manual/advanced direct payload control. ' +
+      'New agents MUST use chat model gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). Fallback: gemini-3.1-flash-lite. Do not pick gpt-4o / gpt-4o-mini / other legacy models.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2329,7 +2669,7 @@ const tools: Tool[] = [
         additionalConfig: {
           type: 'object',
           description:
-            'Escape hatch for raw agent fields not modeled by this MCP yet. This is not a primary ConvoCore concept; prefer explicit fields like enableNodes, vg_instructions, vg_enableUIEngine, nodes, and voiceConfig. Never set read-only fields like ownerID here.',
+            'Escape hatch for raw agent fields not modeled by this MCP yet. This is not a primary Convocore concept; prefer explicit fields like enableNodes, vg_instructions, vg_enableUIEngine, nodes, and voiceConfig. Never set read-only fields like ownerID here.',
         },
       },
       required: ['title'],
@@ -2338,7 +2678,7 @@ const tools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, and vg_* overrides are blocked from additionalConfig. ' +
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, chat model gpt-5.6-luna (fallback gemini-3.1-flash-lite), and vg_* overrides are blocked from additionalConfig. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
       type: 'object',
@@ -2426,7 +2766,7 @@ const tools: Tool[] = [
   {
     name: 'get_agent',
     description:
-      'Retrieve details of a specific ConvoCore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only. ' +
+      'Retrieve details of a specific Convocore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only. ' +
       'Response includes prototypeUrl / tryItUrl — share that public demo with the user (https://app.convocore.ai/{eu|na}/prototype/{agentId}). Never invent /agents/ links.',
     inputSchema: {
       type: 'object',
@@ -2442,7 +2782,7 @@ const tools: Tool[] = [
   {
     name: 'update_agent',
     description:
-      'Update an existing ConvoCore agent. CRITICAL prompt rule: first get_agent when unsure. If enableNodes=true, update nodes[0].instructions to change the canonical main/system prompt. If enableNodes=false or the agent is old and has no nodes, update legacy vg_instructions instead. ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
+      'Update an existing Convocore agent (full-field PATCH). CRITICAL: for large prompts prefer patch_agent_prompt (Cursor-style exact old_string→new_string) instead of rewriting the entire instructions string. Prompt rule: if enableNodes=true, main prompt is nodes[0].instructions; if legacy, vg_instructions. ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2510,8 +2850,55 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'patch_agent_prompt',
+    description:
+      'Performs exact string replacements in an agent prompt or related text field — same idea as Cursor StrReplace for files. ' +
+      'USE THIS instead of update_agent when the prompt is large and you only need to change a specific section. ' +
+      'Workflow: get_agent (or prior context) → copy the exact span into old_string (include enough surrounding lines so it is unique) → new_string is the replacement → this tool patches and PATCHes the agent. ' +
+      'old_string must match the current text exactly including whitespace. Prefer editing existing prompts with this tool over rewriting the whole instructions blob. ' +
+      'Only use replace_all=true when you intentionally want every occurrence changed. ' +
+      'target=auto picks nodes[0].instructions when enableNodes/nodes exist, otherwise vg_instructions. ' +
+      'By default also syncs the same replace onto the other main-prompt mirrors (nodes[0].instructions / vg_instructions / vg_systemPrompt) when they contain old_string.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID whose prompt/text field to patch',
+        },
+        old_string: {
+          type: 'string',
+          description:
+            'Exact text to find (whitespace-sensitive). MUST match the current prompt exactly. Include surrounding context so the match is unique unless replace_all is true.',
+        },
+        new_string: {
+          type: 'string',
+          description:
+            'Replacement text for the matched span. Use an empty string to delete the matched text.',
+        },
+        replace_all: {
+          type: 'boolean',
+          description:
+            'If false (default), fails when old_string matches more than once. If true, replaces every occurrence.',
+        },
+        target: {
+          type: 'string',
+          enum: ['auto', 'nodes0', 'vg_instructions', 'vg_systemPrompt', 'proactiveMessage', 'customCSS'],
+          description:
+            'Field to patch. auto (default) = nodes[0].instructions when present, else vg_instructions. customCSS patches widget CSS surgically.',
+        },
+        sync_mirrors: {
+          type: 'boolean',
+          description:
+            'When patching a main prompt field, also apply the same exact replace to the other main mirrors if they contain old_string (default true). Ignored for proactiveMessage/customCSS.',
+        },
+      },
+      required: ['agentId', 'old_string', 'new_string'],
+    },
+  },
+  {
     name: 'delete_agent',
-    description: 'Delete a ConvoCore agent permanently',
+    description: 'Delete a Convocore agent permanently',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2542,7 +2929,7 @@ const tools: Tool[] = [
   {
     name: 'search_agents',
     description:
-      'Search/filter ConvoCore agents. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
+      'Search/filter Convocore agents. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3073,7 +3460,7 @@ const tools: Tool[] = [
   {
     name: 'create_kb_from_urls',
     description:
-      'PREFERRED for adding many website pages to an agent KB. Pass up to 50 URLs; the ConvoCore KB router scrapes them (scrapeContent=true). ' +
+      'PREFERRED for adding many website pages to an agent KB. Pass up to 50 URLs; the Convocore KB router scrapes them (scrapeContent=true). ' +
       'Do NOT web-fetch/scrape_url then paste content into create_kb_doc — that is slow and duplicates work. ' +
       'mode=per_url (default): one KB doc per URL. mode=batch: one API call with urls[]. ' +
       'For a whole site prefer create_kb_doc sourceType=sitemap. Scraping is async — poll list_kb_docs/get_kb_doc for status.',
@@ -3224,7 +3611,8 @@ const tools: Tool[] = [
   },
   {
     name: 'update_kb_doc',
-    description: 'Update a knowledge base document (VG agents only)',
+    description:
+      'Update a knowledge base document (VG agents only). For large document bodies prefer patch_kb_doc (Cursor-style exact old_string→new_string) instead of rewriting the entire content field.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3267,6 +3655,49 @@ const tools: Tool[] = [
     },
   },
   {
+    name: 'patch_kb_doc',
+    description:
+      'Performs exact string replacements in a knowledge-base document — same idea as Cursor StrReplace for files. ' +
+      'USE THIS instead of update_kb_doc when the document body is large and you only need to change a specific section. ' +
+      'Workflow: get_kb_doc → copy the exact span into old_string (include enough surrounding context to make it unique) → new_string is the replacement → this tool patches content (or name) and PATCHes the KB doc. ' +
+      'old_string must match the current field text exactly including whitespace. Prefer this over rewriting the entire content field. ' +
+      'Only use replace_all=true when you intentionally want every occurrence changed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID',
+        },
+        docId: {
+          type: 'string',
+          description: 'The KB document ID',
+        },
+        old_string: {
+          type: 'string',
+          description:
+            'Exact text to find in the KB field (whitespace-sensitive). MUST match exactly. Include surrounding context so the match is unique unless replace_all is true.',
+        },
+        new_string: {
+          type: 'string',
+          description:
+            'Replacement text for the matched span. Use an empty string to delete the matched text.',
+        },
+        replace_all: {
+          type: 'boolean',
+          description:
+            'If false (default), fails when old_string matches more than once. If true, replaces every occurrence.',
+        },
+        field: {
+          type: 'string',
+          enum: ['content', 'name'],
+          description: 'Which KB field to patch. Default content (document body).',
+        },
+      },
+      required: ['agentId', 'docId', 'old_string', 'new_string'],
+    },
+  },
+  {
     name: 'delete_kb_doc',
     description: 'Delete a knowledge base document (VG agents only)',
     inputSchema: {
@@ -3304,7 +3735,7 @@ const tools: Tool[] = [
     description:
       'Validate and/or scrape HTTP(S) URLs. ' +
       'DEFAULT mode=check: fast ping of one or many links/images (up to 20) — returns status (200/301/404/etc), ok, content-type, final URL after redirects. Use this to verify widget images, logos, CDN assets, booking links, or any URL before putting it on an agent. ' +
-      'mode=scrape: full ConvoCore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. ' +
+      'mode=scrape: full Convocore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. ' +
       'Do NOT use scrape for KB ingest (use create_kb_from_urls). Workspace is resolved internally — never pass workspaceId.',
     inputSchema: {
       type: 'object',
@@ -3343,7 +3774,7 @@ const tools: Tool[] = [
       properties: {
         agentId: {
           type: 'string',
-          description: 'The ConvoCore agent ID to embed.',
+          description: 'The Convocore agent ID to embed.',
         },
         mode: {
           type: 'string',
@@ -3360,8 +3791,8 @@ const tools: Tool[] = [
   {
     name: 'get_widget_css_styling_guide',
     description:
-      "MUST CALL FIRST whenever the user asks to style/restyle/theme the ConvoCore (vg) chat widget — e.g. 'change the icons to black', 'make the header purple', 'recolor the send button', 'theme the widget dark', 'change the user bubble color', 'restyle the proactive teaser'. " +
-      "Returns the FULL authoritative styling guide (the same SYSTEM_PROMPT used by ConvoCore's server-side AI CSS generator) including: " +
+      "MUST CALL FIRST whenever the user asks to style/restyle/theme the Convocore (vg) chat widget — e.g. 'change the icons to black', 'make the header purple', 'recolor the send button', 'theme the widget dark', 'change the user bubble color', 'restyle the proactive teaser'. " +
+      "Returns the FULL authoritative styling guide (the same SYSTEM_PROMPT used by Convocore's server-side AI CSS generator) including: " +
       "(a) the global output rules (always wrap in ```css, always !important, never invent class names), " +
       "(b) the CRITICAL compound-element CASCADE rule for color/icon changes (.vg-foo, .vg-foo *, .vg-foo svg, .vg-foo path { color + stroke }), " +
       "(c) hard constraints (don't color .vg-message-inner-container-human, don't hide the input, etc.), " +
@@ -3784,7 +4215,7 @@ const tools: Tool[] = [
       "- To force plain text on a UI-Engine-enabled agent for one turn, pass `disableUiEngine: true`.\n\n" +
       UI_ENGINE_PRIMER + "\n\n" +
       "For the FULL UI Engine schema (every payload field, validation rules, allowed enums) call `get_ui_engine_spec` first.\n\n" +
-      "WARNING: This consumes ConvoCore credits exactly like a real agent turn (LLM + voice + tools). It is NOT a dry-run.",
+      "WARNING: This consumes Convocore credits exactly like a real agent turn (LLM + voice + tools). It is NOT a dry-run.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -3982,11 +4413,11 @@ const tools: Tool[] = [
 ];
 
 // Create MCP server (shared by stdio + hosted transports)
-export function createMcpServer(): Server {
+export function createMcpServer(options?: { name?: string; version?: string }): Server {
 const server = new Server(
   {
-    name: 'convocore-mcp',
-    version: '2.2.0',
+    name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
+    version: options?.version || '2.5.3',
   },
   {
     capabilities: {
@@ -4010,11 +4441,11 @@ const PROMPTS = [
   {
     name: 'integrate_website_widget',
     description:
-      'Generate a ready-to-paste website embed snippet for a ConvoCore agent. Fetches the agent ID and fills in region automatically. Use when the user asks to add the chatbot to their site, embed the widget, or get the script tag. Modes: popup-bottom-right (default), popup-bottom-left, full-width (inline div), modal, or voice-react (Next.js WebCall example).',
+      'Generate a ready-to-paste website embed snippet for a Convocore agent. Fetches the agent ID and fills in region automatically. Use when the user asks to add the chatbot to their site, embed the widget, or get the script tag. Modes: popup-bottom-right (default), popup-bottom-left, full-width (inline div), modal, or voice-react (Next.js WebCall example).',
     arguments: [
       {
         name: 'agentId',
-        description: 'The ConvoCore agent ID (from get_agent or the dashboard URL).',
+        description: 'The Convocore agent ID (from get_agent or the dashboard URL).',
         required: true,
       },
       {
@@ -4028,7 +4459,7 @@ const PROMPTS = [
   {
     name: 'generate_widget_css',
     description:
-      "Load the full ConvoCore (vg) chat-widget CSS styling guide as a system message — includes the cascade rule, the complete .vg-* class/id map, hard constraints, the NextUI/Tailwind color system, and selector recipes. Use this whenever you want the assistant to generate or refine CSS for the chat widget. Optionally pass agentId to inject the agent's current customCSS into the context.",
+      "Load the full Convocore (vg) chat-widget CSS styling guide as a system message — includes the cascade rule, the complete .vg-* class/id map, hard constraints, the NextUI/Tailwind color system, and selector recipes. Use this whenever you want the assistant to generate or refine CSS for the chat widget. Optionally pass agentId to inject the agent's current customCSS into the context.",
     arguments: [
       {
         name: 'agentId',
@@ -4275,6 +4706,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const result = await getActiveClient().updateAgent(agentId, payload);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'patch_agent_prompt': {
+        const validated = PatchAgentPromptSchema.parse(args);
+        const result = await patchAgentPromptExact({
+          agentId: validated.agentId,
+          old_string: validated.old_string,
+          new_string: validated.new_string,
+          replace_all: validated.replace_all ?? false,
+          target: validated.target ?? 'auto',
+          sync_mirrors: validated.sync_mirrors ?? true,
+        });
         return {
           content: [
             {
@@ -4691,6 +5142,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const validated = UpdateKBDocSchema.parse(args);
         const { agentId, docId, ...kbData } = validated;
         const result = await getActiveClient().updateKBDoc(agentId, docId, kbData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'patch_kb_doc': {
+        const validated = PatchKbDocSchema.parse(args);
+        const result = await patchKbDocExact({
+          agentId: validated.agentId,
+          docId: validated.docId,
+          old_string: validated.old_string,
+          new_string: validated.new_string,
+          replace_all: validated.replace_all ?? false,
+          field: validated.field ?? 'content',
+        });
         return {
           content: [
             {
@@ -5380,18 +5851,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               ? PRICING.models.filter(
                   (m) =>
                     m.model.toLowerCase().includes(filter) ||
+                    m.modelId.toLowerCase().includes(filter) ||
                     m.provider.toLowerCase().includes(filter),
                 )
               : PRICING.models;
             payload = {
               creditConversion: PRICING.meta.creditConversion,
+              recommendedNewAgentModel: 'gpt-5.6-luna',
+              fallbackNewAgentModel: 'gemini-3.1-flash-lite',
               models,
               filter: filter ?? null,
               count: models.length,
               notes: [
                 'Prices are USD per 1,000,000 tokens (input / output).',
                 'Each interaction also charges 1 base credit ($0.001) on top of token cost.',
-                'BYOK customers pay providers directly — these are the platform-managed prices.',
+                'New agents should use gpt-5.6-luna (then gemini-3.1-flash-lite). Avoid gpt-4o / legacy defaults.',
+                'Higher plans include every lower model tier.',
               ],
             };
             break;
@@ -5446,12 +5921,12 @@ async function startStdioTransport() {
     );
   }
   const defaultConfig = getConfig();
-  initDefaultRequestContext(new ConvoCoreClient(defaultConfig), defaultConfig);
+  initDefaultRequestContext(new ConvocoreClient(defaultConfig), defaultConfig);
 
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('ConvoCore MCP Server running on stdio');
+  console.error('Convocore MCP Server running on stdio');
 }
 
 const entryArg = process.argv[1] ? path.resolve(process.argv[1]) : '';

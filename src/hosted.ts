@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * ConvoCore MCP — hosted Streamable HTTP transport
+ * Convocore MCP — hosted Streamable HTTP transport
  *
  * Deploy behind HTTPS (e.g. https://mcp.convocore.ai/mcp). Clients authenticate with:
  *   Authorization: Bearer <WORKSPACE_SECRET>
@@ -9,7 +9,7 @@
  *   or x-api-key / x-auth-token headers
  *
  * Optional per-request region override:
- *   X-ConvoCore-Region: eu-gcp | na-gcp
+ *   X-Convocore-Region: eu-gcp | na-gcp
  *   or ?region=eu-gcp|na-gcp
  *
  * Stdio / npx entrypoint (dist/index.js) is unchanged.
@@ -31,6 +31,12 @@ import { isMcpPathname } from './connector-url.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
 import { handleHostedOAuth, wwwAuthenticateChallenge } from './hosted-oauth.js';
 import { buildInstallLinks, normalizeRegion } from './install-links.js';
+import { ConvocoreClient } from './convocore-client.js';
+import {
+  extractWorkspaceNameFromPayload,
+  formatMcpDisplayName,
+  sanitizeWorkspaceName,
+} from './mcp-display-name.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -44,7 +50,7 @@ const SESSION_IDLE_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : ONE_YEAR_MS;
 })();
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.5.2';
+const PACKAGE_VERSION = '2.5.3';
 const INSTALL_LINKS_PATH = '/v1/install-links';
 
 function resolveRequestSecret(req: IncomingMessage): string | null {
@@ -87,7 +93,7 @@ function parseRegionValue(raw: string | undefined): 'eu-gcp' | 'na-gcp' | undefi
   return undefined;
 }
 
-/** Prefer X-ConvoCore-Region; fall back to ?region= on the request URL (Claude connectors). */
+/** Prefer X-Convocore-Region; fall back to ?region= on the request URL (Claude connectors). */
 function parseApiRegion(req: IncomingMessage): 'eu-gcp' | 'na-gcp' | undefined {
   const headerRaw = req.headers['x-convocore-region'];
   const fromHeader = parseRegionValue(
@@ -99,6 +105,45 @@ function parseApiRegion(req: IncomingMessage): 'eu-gcp' | 'na-gcp' | undefined {
     const host = req.headers.host || 'localhost';
     const url = new URL(req.url || '/', `http://${host}`);
     return parseRegionValue(url.searchParams.get('region') ?? undefined);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort workspace label for connector / MCP display names.
+ * Prefer explicit input; otherwise try GET /workspaces/{id} or list.
+ */
+async function resolveWorkspaceName(args: {
+  workspaceSecret: string;
+  apiRegion?: 'eu-gcp' | 'na-gcp';
+  workspaceName?: string;
+  workspaceId?: string;
+}): Promise<string | undefined> {
+  const explicit = sanitizeWorkspaceName(args.workspaceName);
+  if (explicit) return explicit;
+
+  const config = buildConfig({
+    workspaceSecret: args.workspaceSecret,
+    apiRegion: args.apiRegion,
+    workspaceId: args.workspaceId,
+  });
+  const client = new ConvocoreClient(config);
+  const workspaceId = config.workspaceId?.trim() || args.workspaceId?.trim();
+
+  try {
+    if (workspaceId) {
+      const single = await client.getWorkspace(workspaceId);
+      const fromSingle = extractWorkspaceNameFromPayload(single);
+      if (fromSingle) return fromSingle;
+    }
+  } catch {
+    // fall through to list
+  }
+
+  try {
+    const listed = await client.listWorkspaces();
+    return extractWorkspaceNameFromPayload(listed);
   } catch {
     return undefined;
   }
@@ -143,7 +188,7 @@ function applyCors(req: IncomingMessage, res: ServerResponse): void {
       'Mcp-Session-Id',
       'MCP-Protocol-Version',
       'Last-Event-ID',
-      'X-ConvoCore-Region',
+      'X-Convocore-Region',
     ].join(', ')
   );
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
@@ -196,7 +241,8 @@ async function destroySession(sessionId: string): Promise<void> {
 
 async function createSession(
   workspaceSecret: string,
-  apiRegion?: 'eu-gcp' | 'na-gcp'
+  apiRegion?: 'eu-gcp' | 'na-gcp',
+  displayHints?: { workspaceName?: string; displayName?: string }
 ): Promise<SessionRecord> {
   const config = buildConfig({ workspaceSecret, apiRegion });
   const context = createRequestContext(config);
@@ -215,7 +261,19 @@ async function createSession(
     },
   });
 
-  const server = createMcpServer();
+  const workspaceName =
+    sanitizeWorkspaceName(displayHints?.workspaceName) ||
+    (await resolveWorkspaceName({
+      workspaceSecret,
+      apiRegion,
+      workspaceId: config.workspaceId,
+    }));
+  const displayName = formatMcpDisplayName({
+    name: displayHints?.displayName,
+    workspaceName,
+  });
+
+  const server = createMcpServer({ name: displayName });
   record = {
     transport,
     server,
@@ -283,7 +341,29 @@ async function resolveSession(
     return null;
   }
 
-  return createSession(secret, parseApiRegion(req));
+  return createSession(secret, parseApiRegion(req), parseDisplayHints(req));
+}
+
+function parseDisplayHints(req: IncomingMessage): {
+  workspaceName?: string;
+  displayName?: string;
+} {
+  try {
+    const host = req.headers.host || 'localhost';
+    const url = new URL(req.url || '/', `http://${host}`);
+    return {
+      workspaceName:
+        url.searchParams.get('workspaceName')?.trim() ||
+        url.searchParams.get('workspace_name')?.trim() ||
+        undefined,
+      displayName:
+        url.searchParams.get('mcpName')?.trim() ||
+        url.searchParams.get('name')?.trim() ||
+        undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function handleMcpRequest(
@@ -357,10 +437,13 @@ const httpServer = createServer(async (req, res) => {
           mcpUrl: 'https://mcp.convocore.ai/mcp',
           workspaceSecret: '<WORKSPACE_SECRET>',
           region: 'eu-gcp | na-gcp',
-          name: 'ConvoCore (optional)',
+          workspaceName: 'Acme Corp (optional — builds name "Convocore Acme Corp")',
+          name: 'Full override (optional)',
+          workspaceId: 'optional — used to look up workspaceName when omitted',
         },
         notes: [
-          'Cursor deeplink embeds Authorization + X-ConvoCore-Region (true one-click).',
+          'Default connector display name is `Convocore {workspaceName}` for Claude / Cursor / ChatGPT-style installs.',
+          'Cursor deeplink embeds Authorization + X-Convocore-Region (true one-click).',
           'Claude connectorUrl uses /t/<base64url(secret)>/mcp?region=… (path survives OAuth resource stripping of ?token=).',
           'Authorize shows a one-click Connect page (auto-submits); no secret paste when path token is present.',
           'OAuth access_token is the workspace secret; expires_in ~10 years + refresh_token.',
@@ -392,13 +475,34 @@ const httpServer = createServer(async (req, res) => {
         const regionRaw =
           typeof body.region === 'string' ? body.region : '';
         const name = typeof body.name === 'string' ? body.name : undefined;
+        const workspaceNameInput =
+          typeof body.workspaceName === 'string'
+            ? body.workspaceName
+            : typeof body.workspace_name === 'string'
+              ? body.workspace_name
+              : undefined;
+        const workspaceId =
+          typeof body.workspaceId === 'string'
+            ? body.workspaceId
+            : typeof body.workspace_id === 'string'
+              ? body.workspace_id
+              : undefined;
 
         const region = normalizeRegion(regionRaw);
+        const workspaceName =
+          (await resolveWorkspaceName({
+            workspaceSecret,
+            apiRegion: region,
+            workspaceName: workspaceNameInput,
+            workspaceId,
+          })) || workspaceNameInput;
+
         const links = buildInstallLinks({
           mcpUrl,
           workspaceSecret,
           region,
           name,
+          workspaceName,
         });
         sendJson(res, 200, { ok: true, ...links });
       } catch (error) {
@@ -450,7 +554,7 @@ const httpServer = createServer(async (req, res) => {
 
 httpServer.listen(PORT, HOST, () => {
   console.error(
-    `ConvoCore MCP hosted server listening on http://${HOST}:${PORT}${MCP_PATH}`
+    `Convocore MCP hosted server listening on http://${HOST}:${PORT}${MCP_PATH}`
   );
 });
 

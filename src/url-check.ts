@@ -1,6 +1,6 @@
 /**
  * Lightweight URL / image validity checks (HTTP status ping).
- * Used by scrape_url mode=check — no ConvoCore crawler, no full page scrape.
+ * Used by scrape_url mode=check — no Convocore crawler, no full page scrape.
  */
 
 import { mapWithConcurrency } from './parallel.js';
@@ -87,7 +87,7 @@ export async function checkUrl(
       {
         method: 'HEAD',
         headers: {
-          'User-Agent': 'ConvoCore-MCP-URL-Check/2.5.2',
+          'User-Agent': 'Convocore-MCP-URL-Check/2.5.2',
           Accept: '*/*',
         },
       },
@@ -102,7 +102,7 @@ export async function checkUrl(
         {
           method: 'GET',
           headers: {
-            'User-Agent': 'ConvoCore-MCP-URL-Check/2.5.2',
+            'User-Agent': 'Convocore-MCP-URL-Check/2.5.2',
             Accept: '*/*',
             Range: 'bytes=0-0',
           },
@@ -118,7 +118,7 @@ export async function checkUrl(
         {
           method: 'GET',
           headers: {
-            'User-Agent': 'ConvoCore-MCP-URL-Check/2.5.2',
+            'User-Agent': 'Convocore-MCP-URL-Check/2.5.2',
             Accept: '*/*',
             Range: 'bytes=0-0',
           },

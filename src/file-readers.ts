@@ -1,5 +1,5 @@
 /**
- * File reader utilities for the ConvoCore MCP server.
+ * File reader utilities for the Convocore MCP server.
  *
  * COLD-START RULE: this module must NOT statically import any heavy
  * dependency. `sharp`, `pdf-parse`, `mammoth`, and `xlsx` are all loaded

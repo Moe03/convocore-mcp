@@ -3,7 +3,7 @@
  *
  * Claude always attempts Dynamic Client Registration against the MCP host.
  * Without /register + authorize + token, users see:
- *   "Couldn't register with ConvoCore's sign-in service"
+ *   "Couldn't register with Convocore's sign-in service"
  *
  * Access tokens ARE the workspace secret (Bearer), with ~10y expiry + refresh,
  * so MCP auth stays Authorization: Bearer <WORKSPACE_SECRET>.
@@ -16,6 +16,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extractSecretFromConnectorUrl } from './connector-url.js';
+import { formatMcpDisplayName } from './mcp-display-name.js';
 
 const TEN_YEARS_SEC = 10 * 365 * 24 * 60 * 60;
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -180,11 +181,16 @@ function hiddenFieldsHtml(params: URLSearchParams, extra?: Record<string, string
 }
 
 /** One-click Connect — secret already known from connector URL / path. */
-function connectOnlyHtml(params: URLSearchParams, workspaceSecret: string): string {
+function connectOnlyHtml(
+  params: URLSearchParams,
+  workspaceSecret: string,
+  displayName: string
+): string {
   const hidden = hiddenFieldsHtml(params, { workspace_secret: workspaceSecret });
+  const title = escapeHtml(displayName);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Connect ConvoCore</title>
+<title>Connect ${title}</title>
 <style>
   body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0b1220;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
   .card{width:min(380px,92vw);background:#111827;border:1px solid #1f2937;border-radius:16px;padding:28px;text-align:center}
@@ -192,8 +198,8 @@ function connectOnlyHtml(params: URLSearchParams, workspaceSecret: string): stri
   button{width:100%;padding:14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
   button:hover{background:#1d4ed8}
 </style></head><body><div class="card">
-  <h1>Connect ConvoCore</h1>
-  <p>Your workspace is ready. Click Connect to finish linking Claude.</p>
+  <h1>Connect ${title}</h1>
+  <p>Your workspace is ready. Click Connect to finish linking this MCP.</p>
   <form id="connect" method="POST" action="/oauth/authorize">
     ${hidden}
     <button type="submit">Connect</button>
@@ -203,14 +209,19 @@ function connectOnlyHtml(params: URLSearchParams, workspaceSecret: string): stri
 }
 
 /** Last-resort paste form — only if Claude omitted the connector secret entirely. */
-function authorizeFormHtml(params: URLSearchParams, error?: string): string {
+function authorizeFormHtml(
+  params: URLSearchParams,
+  displayName: string,
+  error?: string
+): string {
   const err = error
     ? `<p style="color:#b91c1c;margin:0 0 12px">${escapeHtml(error)}</p>`
     : '';
   const hidden = hiddenFieldsHtml(params);
+  const title = escapeHtml(displayName);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Connect ConvoCore MCP</title>
+<title>Connect ${title}</title>
 <style>
   body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0b1220;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
   .card{width:min(420px,92vw);background:#111827;border:1px solid #1f2937;border-radius:16px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
@@ -220,7 +231,7 @@ function authorizeFormHtml(params: URLSearchParams, error?: string): string {
   button{margin-top:16px;width:100%;padding:12px 14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}
   button:hover{background:#1d4ed8}
 </style></head><body><div class="card">
-  <h1>Connect ConvoCore</h1>
+  <h1>Connect ${title}</h1>
   <p>We could not read your workspace secret from the connector URL. Paste it once to finish.</p>
   ${err}
   <form method="POST" action="/oauth/authorize">
@@ -319,6 +330,17 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     params.get('workspace_secret')?.trim() ||
     params.get('token')?.trim() ||
     '';
+  const fromResource = extractSecretFromConnectorUrl(resource);
+  const displayName = formatMcpDisplayName({
+    name:
+      params.get('mcpName')?.trim() ||
+      params.get('name')?.trim() ||
+      fromResource.displayName,
+    workspaceName:
+      params.get('workspaceName')?.trim() ||
+      params.get('workspace_name')?.trim() ||
+      fromResource.workspaceName,
+  });
 
   if (responseType !== 'code') {
     sendJson(res, 400, { error: 'unsupported_response_type' });
@@ -328,7 +350,11 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     sendHtml(
       res,
       400,
-      authorizeFormHtml(params, 'Missing OAuth parameters from Claude. Close and try Add again.')
+      authorizeFormHtml(
+        params,
+        displayName,
+        'Missing OAuth parameters from Claude. Close and try Add again.'
+      )
     );
     return;
   }
@@ -346,23 +372,22 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     }
   }
 
-  const fromResource = extractSecretFromConnectorUrl(resource);
   const secret = workspaceSecretParam || fromResource.secret;
   const region = fromResource.region;
 
   if (!secret) {
     if (req.method === 'POST') {
-      sendHtml(res, 400, authorizeFormHtml(params, 'Workspace secret is required.'));
+      sendHtml(res, 400, authorizeFormHtml(params, displayName, 'Workspace secret is required.'));
       return;
     }
-    sendHtml(res, 200, authorizeFormHtml(params));
+    sendHtml(res, 200, authorizeFormHtml(params, displayName));
     return;
   }
 
   // GET with secret already in resource/path: one-click Connect (auto-submits).
   // POST continues to issue the auth code.
   if (req.method === 'GET') {
-    sendHtml(res, 200, connectOnlyHtml(params, secret));
+    sendHtml(res, 200, connectOnlyHtml(params, secret, displayName));
     return;
   }
 

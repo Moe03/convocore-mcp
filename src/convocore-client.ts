@@ -1,11 +1,11 @@
 /**
- * ConvoCore API Client
- * Handles all API interactions with ConvoCore
+ * Convocore API Client
+ * Handles all API interactions with Convocore
  */
 
 import WebSocket from 'ws';
 import {
-  ConvoCoreConfig,
+  ConvocoreConfig,
   Agent,
   CreateAgentPayload,
   UpdateAgentPayload,
@@ -97,7 +97,7 @@ function collectKbSourceUrls(docs: any[]): Set<string> {
   return set;
 }
 
-export class ConvoCoreApiRequestError extends Error {
+export class ConvocoreApiRequestError extends Error {
   status?: number;
   endpoint: string;
   method: string;
@@ -117,7 +117,7 @@ export class ConvoCoreApiRequestError extends Error {
     rawBody?: string;
   }) {
     super(args.message);
-    this.name = 'ConvoCoreApiRequestError';
+    this.name = 'ConvocoreApiRequestError';
     this.status = args.status;
     this.endpoint = args.endpoint;
     this.method = args.method;
@@ -200,10 +200,10 @@ function summarizeUiEngineSnapshot(snapshot: any | null): UiEngineMessageSummary
   });
 }
 
-export class ConvoCoreClient {
-  private config: ConvoCoreConfig;
+export class ConvocoreClient {
+  private config: ConvocoreConfig;
 
-  constructor(config: ConvoCoreConfig) {
+  constructor(config: ConvocoreConfig) {
     this.config = config;
   }
 
@@ -240,7 +240,7 @@ export class ConvoCoreClient {
       if (!response.ok) {
         const error = (data && typeof data === 'object' ? data : {}) as ApiError;
         const message = error.message || `API request failed with status ${response.status}`;
-        throw new ConvoCoreApiRequestError({
+        throw new ConvocoreApiRequestError({
           message,
           endpoint,
           method,
@@ -254,17 +254,17 @@ export class ConvoCoreClient {
 
       return data as T;
     } catch (error) {
-      if (error instanceof ConvoCoreApiRequestError) {
+      if (error instanceof ConvocoreApiRequestError) {
         throw error;
       }
       if (error instanceof Error) {
-        throw new ConvoCoreApiRequestError({
+        throw new ConvocoreApiRequestError({
           message: error.message,
           endpoint,
           method,
         });
       }
-      throw new ConvoCoreApiRequestError({
+      throw new ConvocoreApiRequestError({
         message: 'Unknown error occurred during API request',
         endpoint,
         method,
@@ -326,7 +326,7 @@ export class ConvoCoreClient {
 
   /**
    * Search agents with filters
-   * Note: workspaceId should be your actual workspace/org ID from ConvoCore
+   * Note: workspaceId should be your actual workspace/org ID from Convocore
    */
   async searchAgents(
     workspaceId: string,
@@ -1075,6 +1075,18 @@ export class ConvoCoreClient {
     };
   }
 
+  // ==================== WORKSPACE METHODS ====================
+
+  /** List workspaces visible to the authenticated workspace secret. */
+  async listWorkspaces(): Promise<any> {
+    return this.request<any>('/workspaces');
+  }
+
+  /** Get a single workspace by id. */
+  async getWorkspace(workspaceId: string): Promise<any> {
+    return this.request<any>(`/workspaces/${encodeURIComponent(workspaceId)}`);
+  }
+
   // ==================== CRAWLER METHODS ====================
 
   /**
@@ -1402,7 +1414,7 @@ export class ConvoCoreClient {
    * an aggregated result.
    *
    * Notes:
-   * - This consumes ConvoCore credits exactly like a normal agent turn.
+   * - This consumes Convocore credits exactly like a normal agent turn.
    * - Authentication is sent via the `Authorization: Bearer <secret>` header
    *   on the WS handshake (same scheme as REST).
    */

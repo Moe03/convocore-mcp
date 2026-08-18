@@ -1,8 +1,8 @@
 /**
- * ConvoCore API TypeScript Type Definitions
+ * Convocore API TypeScript Type Definitions
  */
 
-export interface ConvoCoreConfig {
+export interface ConvocoreConfig {
   workspaceSecret: string;
   apiRegion: 'eu-gcp' | 'na-gcp';
   baseUrl: string;
@@ -314,7 +314,7 @@ export interface UiEngineMessageSummary {
 }
 
 /**
- * Aggregated result returned by ConvoCoreClient.interactWithAgent — flattens
+ * Aggregated result returned by ConvocoreClient.interactWithAgent — flattens
  * the streamed chunks into something an MCP host can consume in one shot.
  *
  * IMPORTANT semantics for UI Engine turns:

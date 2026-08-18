@@ -1,7 +1,7 @@
 /**
- * AI CSS Generator system prompt for the ConvoCore (vg) chat widget.
+ * AI CSS Generator system prompt for the Convocore (vg) chat widget.
  *
- * This is the SAME authoritative prompt the ConvoCore backend uses for the
+ * This is the SAME authoritative prompt the Convocore backend uses for the
  * /utils/users/:user_id/ai-css-generator endpoint, embedded here so MCP
  * clients (Claude / Cursor / etc.) can produce widget CSS that follows the
  * exact same rules, selectors and constraints WITHOUT going through the

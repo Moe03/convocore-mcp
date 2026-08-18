@@ -6,7 +6,7 @@
  *   https://mcp.convocore.ai/t/<base64url(secret)>/mcp?region=eu-gcp
  */
 
-export type ConvoCoreRegion = 'eu-gcp' | 'na-gcp';
+export type ConvocoreRegion = 'eu-gcp' | 'na-gcp';
 
 const PATH_TOKEN_RE = /^\/t\/([^/]+)\/mcp\/?$/i;
 
@@ -44,14 +44,23 @@ export function isMcpPathname(pathname: string, mcpPath = '/mcp'): boolean {
   return PATH_TOKEN_RE.test(pathname);
 }
 
+export type ClaudeConnectorUrlOptions = {
+  /** Workspace label — used on OAuth Connect UI when Claude keeps query params. */
+  workspaceName?: string;
+  /** Full display name (e.g. `Convocore Acme`) for OAuth Connect UI. */
+  displayName?: string;
+};
+
 /**
  * Claude connector URL: secret in PATH (survives OAuth resource canonicalization),
  * region in query. Also keeps ?token= as a backup for non-OAuth clients.
+ * Optional workspaceName / displayName query params feed OAuth Connect page titles.
  */
 export function mcpUrlForClaudeConnector(
   mcpUrl: string,
-  region: ConvoCoreRegion,
-  workspaceSecret: string
+  region: ConvocoreRegion,
+  workspaceSecret: string,
+  options?: ClaudeConnectorUrlOptions
 ): string {
   const url = new URL(mcpUrl);
   const encoded = encodePathSecret(workspaceSecret);
@@ -60,13 +69,19 @@ export function mcpUrlForClaudeConnector(
   url.search = '';
   url.searchParams.set('region', region);
   url.searchParams.set('token', workspaceSecret);
+  const workspaceName = options?.workspaceName?.trim();
+  if (workspaceName) url.searchParams.set('workspaceName', workspaceName);
+  const displayName = options?.displayName?.trim();
+  if (displayName) url.searchParams.set('mcpName', displayName);
   return url.toString();
 }
 
-/** Parse secret + region from a full connector / OAuth resource URL. */
+/** Parse secret + region + display hints from a full connector / OAuth resource URL. */
 export function extractSecretFromConnectorUrl(resource: string | null | undefined): {
   secret?: string;
   region?: string;
+  workspaceName?: string;
+  displayName?: string;
 } {
   if (!resource) return {};
   try {
@@ -80,7 +95,15 @@ export function extractSecretFromConnectorUrl(resource: string | null | undefine
       undefined;
     const secret = fromPath || fromQuery || undefined;
     const region = url.searchParams.get('region')?.trim() || undefined;
-    return { secret, region };
+    const workspaceName =
+      url.searchParams.get('workspaceName')?.trim() ||
+      url.searchParams.get('workspace_name')?.trim() ||
+      undefined;
+    const displayName =
+      url.searchParams.get('mcpName')?.trim() ||
+      url.searchParams.get('name')?.trim() ||
+      undefined;
+    return { secret, region, workspaceName, displayName };
   } catch {
     return {};
   }

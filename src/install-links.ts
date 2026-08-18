@@ -8,32 +8,42 @@
 
 import {
   mcpUrlForClaudeConnector,
-  type ConvoCoreRegion,
+  type ConvocoreRegion,
 } from './connector-url.js';
+import { formatMcpDisplayName } from './mcp-display-name.js';
 
-export type { ConvoCoreRegion };
+export type { ConvocoreRegion };
 export { mcpUrlForClaudeConnector };
+export { formatMcpDisplayName } from './mcp-display-name.js';
 
 export type InstallLinksInput = {
   /** Hosted MCP endpoint, e.g. https://mcp.convocore.ai/mcp */
   mcpUrl: string;
   workspaceSecret: string;
-  region: ConvoCoreRegion | 'eu' | 'na';
-  /** Display name in Cursor / Claude (default: ConvoCore) */
+  region: ConvocoreRegion | 'eu' | 'na';
+  /**
+   * Full display-name override for Cursor / Claude / ChatGPT connectors.
+   * Prefer `workspaceName` so hosts show `Convocore {workspaceName}`.
+   */
   name?: string;
+  /** Workspace label — used to build `Convocore {workspaceName}` when `name` is omitted. */
+  workspaceName?: string;
 };
 
 export type CursorRemoteMcpConfig = {
   url: string;
   headers: {
     Authorization: string;
-    'X-ConvoCore-Region': ConvoCoreRegion;
+    'X-Convocore-Region': ConvocoreRegion;
   };
 };
 
 export type InstallLinksResult = {
+  /** Display name shown in Claude / Cursor / ChatGPT (e.g. `Convocore Acme`) */
   name: string;
-  region: ConvoCoreRegion;
+  /** Workspace label used to derive `name` when present */
+  workspaceName?: string;
+  region: ConvocoreRegion;
   mcpUrl: string;
   /** Connector URL for Claude (/t/<secret>/mcp?region=…&token=…) */
   claudeConnectorUrl: string;
@@ -75,11 +85,9 @@ export type InstallLinksResult = {
   };
 };
 
-const DEFAULT_NAME = 'ConvoCore';
-
 export function normalizeRegion(
-  region: ConvoCoreRegion | 'eu' | 'na' | string
-): ConvoCoreRegion {
+  region: ConvocoreRegion | 'eu' | 'na' | string
+): ConvocoreRegion {
   const value = region.trim().toLowerCase();
   if (value === 'eu' || value === 'eu-gcp') return 'eu-gcp';
   if (value === 'na' || value === 'na-gcp') return 'na-gcp';
@@ -87,7 +95,7 @@ export function normalizeRegion(
 }
 
 /** Append or replace ?region= on the MCP URL. */
-export function mcpUrlWithRegion(mcpUrl: string, region: ConvoCoreRegion): string {
+export function mcpUrlWithRegion(mcpUrl: string, region: ConvocoreRegion): string {
   const url = new URL(mcpUrl);
   url.searchParams.set('region', region);
   return url.toString();
@@ -96,13 +104,13 @@ export function mcpUrlWithRegion(mcpUrl: string, region: ConvoCoreRegion): strin
 export function buildCursorRemoteConfig(input: {
   mcpUrl: string;
   workspaceSecret: string;
-  region: ConvoCoreRegion;
+  region: ConvocoreRegion;
 }): CursorRemoteMcpConfig {
   return {
     url: input.mcpUrl,
     headers: {
       Authorization: `Bearer ${input.workspaceSecret}`,
-      'X-ConvoCore-Region': input.region,
+      'X-Convocore-Region': input.region,
     },
   };
 }
@@ -143,7 +151,7 @@ export function buildClaudeDesktopRemoteConfig(input: {
   name: string;
   mcpUrl: string;
   workspaceSecret: string;
-  region: ConvoCoreRegion;
+  region: ConvocoreRegion;
 }): InstallLinksResult['claudeDesktop'] {
   // mcp-remote interpolates ${ENV} inside --header values from the env block.
   return {
@@ -157,7 +165,7 @@ export function buildClaudeDesktopRemoteConfig(input: {
           '--header',
           'Authorization: Bearer ${WORKSPACE_SECRET}',
           '--header',
-          'X-ConvoCore-Region: ${CONVOCORE_API_REGION}',
+          'X-Convocore-Region: ${CONVOCORE_API_REGION}',
         ],
         env: {
           WORKSPACE_SECRET: input.workspaceSecret,
@@ -169,7 +177,11 @@ export function buildClaudeDesktopRemoteConfig(input: {
 }
 
 export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult {
-  const name = (input.name?.trim() || DEFAULT_NAME).slice(0, 64);
+  const workspaceName = input.workspaceName?.trim() || undefined;
+  const name = formatMcpDisplayName({
+    name: input.name,
+    workspaceName,
+  });
   const region = normalizeRegion(input.region);
   const mcpUrl = input.mcpUrl.trim();
   if (!mcpUrl) throw new Error('mcpUrl is required');
@@ -183,10 +195,14 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
     workspaceSecret: secret,
     region,
   });
-  const claudeConnectorUrl = mcpUrlForClaudeConnector(mcpUrl, region, secret);
+  const claudeConnectorUrl = mcpUrlForClaudeConnector(mcpUrl, region, secret, {
+    workspaceName,
+    displayName: name,
+  });
 
   return {
     name,
+    workspaceName,
     region,
     mcpUrl,
     claudeConnectorUrl,
@@ -213,9 +229,9 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
       requiresAuthHeader: false,
       steps: [
         'Open the Claude install URL (sign in if needed).',
-        'Confirm the prefilled ConvoCore name and URL (secret is in the path /t/…/mcp).',
+        `Confirm the prefilled name "${name}" and URL (secret is in the path /t/…/mcp).`,
         'Leave OAuth Client ID / Client Secret EMPTY — Claude auto-registers (DCR).',
-        'If a ConvoCore page opens, click Connect once — no secret paste (already in the URL).',
+        'If a Convocore page opens, click Connect once — no secret paste (already in the URL).',
         'Connection tokens last ~10 years (with refresh).',
       ],
     },

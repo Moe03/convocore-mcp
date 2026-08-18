@@ -95,9 +95,9 @@ export default function VoicePage() {
 }`;
 }
 
-export const MCP_SERVER_INSTRUCTIONS = `# ConvoCore MCP — usage guide
+export const MCP_SERVER_INSTRUCTIONS = `# Convocore MCP — usage guide
 
-You manage ConvoCore AI agents via this MCP. Follow these rules so integrations work without mistakes.
+You manage Convocore AI agents via this MCP. Follow these rules so integrations work without mistakes.
 
 ## CRITICAL — public "try the agent" / prototype demo link
 
@@ -125,13 +125,21 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 4. **Do NOT** answer with only high-level options (popup vs embedded) without the actual script.
 5. Mention Shopify/WordPress/Wix only as a one-liner: "paste this snippet before \`</body>\`" — the snippet works on any platform.
 
+## CRITICAL — chat model for new agents
+
+- **Always create new agents on \`gpt-5.6-luna\`** (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`). Best quality and best value.
+- If Luna is blocked by plan/availability, use **\`gemini-3.1-flash-lite\`**.
+- **Do not** pick legacy models: \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other old defaults.
+- Prefer newer models (GPT-5.6 family, Gemini 3.x, Claude 4.5/4.6/4.7) over older ones.
+
 ## Before you change an agent
 
 1. Call \`get_agent\` with the agent ID when you are unsure of current config.
 2. **Main prompt location:** if \`enableNodes=true\`, edit \`nodes[0].instructions\`. If legacy/no nodes, use \`vg_instructions\`.
-3. Prefer \`create_agent_from_template\` for new chat+voice agents (not raw \`create_agent\` unless advanced control is needed).
-4. \`ownerID\` / workspace ID is read-only — never try to PATCH it.
-5. \`search_agents\` may 404 on some workspaces — use \`list_agents\` or \`get_agent\` instead.
+3. **Large prompt edits:** prefer \`patch_agent_prompt\` (exact \`old_string\` → \`new_string\`, Cursor StrReplace style) over rewriting the whole prompt via \`update_agent\`.
+4. Prefer \`create_agent_from_template\` for new chat+voice agents (not raw \`create_agent\` unless advanced control is needed).
+5. \`ownerID\` / workspace ID is read-only — never try to PATCH it.
+6. \`search_agents\` may 404 on some workspaces — use \`list_agents\` or \`get_agent\` instead.
 
 ## Interact / UI Engine agents
 
@@ -259,6 +267,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - \`refreshRate\` is \`3d\` | \`7d\` | \`never\` (not hourly).
 - Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
 - Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\`.
+- **Surgical KB edits:** for large docs use \`patch_kb_doc\` (\`old_string\` / \`new_string\`, same semantics as Cursor StrReplace) instead of rewriting full \`content\` via \`update_kb_doc\`.
 - **Validate links/images** (status 200/404, broken CDN, logo URLs): \`scrape_url\` with \`mode: "check"\` + \`urls: [...]\` (default mode). Fast ping — not a full scrape.
 - Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
 
@@ -271,7 +280,8 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.
 - **"Change widget colors / button look"** → CSS tools (\`get_widget_css_styling_guide\` → \`update_agent_custom_css\`).
-- **"Change what the agent says"** → \`update_agent\` → \`nodes[0].instructions\` or \`proactiveMessage\`.
+- **"Change what the agent says"** → for small/full rewrites \`update_agent\`; for large prompts \`patch_agent_prompt\` (\`old_string\`/\`new_string\`) → \`nodes[0].instructions\` or \`proactiveMessage\`.
+- **"Tweak one section of a big KB doc"** → \`get_kb_doc\` → \`patch_kb_doc\`.
 - **"Fix agent not answering in Arabic / wrong language"** → check \`lang\`, voice \`language\`, and main prompt — not the embed script alone.
 
 **Slash prompt:** \`integrate_website_widget\` (pass \`agentId\` + optional \`mode\`) returns a copy-paste embed snippet with real IDs filled in.

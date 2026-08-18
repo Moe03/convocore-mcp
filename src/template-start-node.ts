@@ -1,3 +1,27 @@
+/** Default chat model for every new agent. Best quality/value — prefer this. */
+export const RECOMMENDED_CHAT_MODEL_ID = 'gpt-5.6-luna';
+/** Solid cheaper fallback if Luna is unavailable on the workspace plan. */
+export const FALLBACK_CHAT_MODEL_ID = 'gemini-3.1-flash-lite';
+
+const LEGACY_CHAT_MODEL_IDS = new Set([
+  'gpt-4o',
+  'gpt-4o-mini',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4.1-mini-2025-04-14',
+  'gpt-4.1-2025-04-14',
+  'zai-org/GLM-5',
+  'glm-5',
+]);
+
+export function isLegacyChatModelId(modelId: string | undefined): boolean {
+  if (!modelId) return true;
+  const id = modelId.trim().toLowerCase();
+  if (!id) return true;
+  if (LEGACY_CHAT_MODEL_IDS.has(id) || LEGACY_CHAT_MODEL_IDS.has(modelId.trim())) return true;
+  return id.includes('gpt-4o') || id.includes('glm-4') || id.includes('glm-5');
+}
+
 export const TEMPLATE_START_NODE_DEFAULTS = {
   id: '__start__',
   type: 'start',
@@ -5,7 +29,7 @@ export const TEMPLATE_START_NODE_DEFAULTS = {
   description: 'Start node',
   instructions: '',
   llmConfig: {
-    modelId: 'gpt-4o-mini',
+    modelId: RECOMMENDED_CHAT_MODEL_ID,
     temperature: 0.5,
     maxTokens: 2024,
   },

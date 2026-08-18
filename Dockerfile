@@ -1,4 +1,4 @@
-# ConvoCore MCP — remote Streamable HTTP (default for Docker / mcp.convocore.ai)
+# Convocore MCP — remote Streamable HTTP (default for Docker / mcp.convocore.ai)
 # Listens on port 3009. Users pass WORKSPACE_SECRET as:
 #   Authorization: Bearer <WORKSPACE_SECRET>
 # Do NOT set WORKSPACE_SECRET in the container — multi-tenant per request.

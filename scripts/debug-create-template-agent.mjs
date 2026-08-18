@@ -1,6 +1,6 @@
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { ConvoCoreClient } from '../dist/convocore-client.js';
+import { ConvocoreClient } from '../dist/convocore-client.js';
 
 function parseToolTextResult(result) {
   const textPart = Array.isArray(result?.content)
@@ -177,7 +177,7 @@ async function main() {
     },
   };
 
-  const restClient = new ConvoCoreClient({
+  const restClient = new ConvocoreClient({
     workspaceSecret,
     apiRegion,
     baseUrl,

@@ -1,10 +1,10 @@
 /**
- * Configuration management for ConvoCore MCP Server
+ * Configuration management for Convocore MCP Server
  */
 
-import { ConvoCoreConfig } from './types.js';
+import { ConvocoreConfig } from './types.js';
 
-export type ConvoCoreConfigOptions = {
+export type ConvocoreConfigOptions = {
   workspaceSecret: string;
   apiRegion?: 'eu-gcp' | 'na-gcp';
   baseUrl?: string;
@@ -12,7 +12,7 @@ export type ConvoCoreConfigOptions = {
   workspaceId?: string;
 };
 
-export function buildConfig(options: ConvoCoreConfigOptions): ConvoCoreConfig {
+export function buildConfig(options: ConvocoreConfigOptions): ConvocoreConfig {
   const apiRegion = (options.apiRegion || process.env.CONVOCORE_API_REGION || 'eu-gcp') as
     | 'eu-gcp'
     | 'na-gcp';
@@ -39,7 +39,7 @@ export function buildConfig(options: ConvoCoreConfigOptions): ConvoCoreConfig {
   };
 }
 
-export function getConfig(): ConvoCoreConfig {
+export function getConfig(): ConvocoreConfig {
   const workspaceSecret = process.env.WORKSPACE_SECRET;
 
   if (!workspaceSecret) {

@@ -4,7 +4,7 @@
  * This is static guidance for LLM hosts. It intentionally describes the
  * canonical ownership models, safe update boundaries, and routing differences
  * so agents do not confuse WhatsApp, SMS/Twilio, Messenger, Instagram, and
- * workspace-level integrations while performing ConvoCore CRUD.
+ * workspace-level integrations while performing Convocore CRUD.
  */
 
 export const CHANNEL_INTEGRATION_SPEC = {

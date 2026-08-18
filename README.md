@@ -1,6 +1,6 @@
-# ConvoCore MCP Server
+# Convocore MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **ConvoCore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains many tools for agents, conversations, knowledge bases (including mass URL ingest), and single-URL scraping.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects AI assistants (Claude Desktop, Cursor, and other MCP hosts) to the **Convocore** HTTP API. The host spawns this process, talks to it over **stdio** (standard input/output), and gains many tools for agents, conversations, knowledge bases (including mass URL ingest), and single-URL scraping.
 
 [![npm version](https://img.shields.io/npm/v/convocore-mcp.svg)](https://www.npmjs.com/package/convocore-mcp)
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
@@ -13,16 +13,16 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | Piece | Role |
 |--------|------|
 | **MCP** | A protocol so clients (e.g. Claude) can list and call **tools** with structured arguments and get text (or other) results back. |
-| **This server** | A small Node.js app using `@modelcontextprotocol/sdk`: it registers tools, validates arguments with **Zod**, and proxies calls to ConvoCore’s REST API with your **workspace bearer token**. |
-| **ConvoCore API** | Backend at `https://{region}-api.vg-stuff.com/v3` (see [Regions](#api-regions-and-base-urls)). Your `WORKSPACE_SECRET` is sent as `Authorization: Bearer …`. |
+| **This server** | A small Node.js app using `@modelcontextprotocol/sdk`: it registers tools, validates arguments with **Zod**, and proxies calls to Convocore’s REST API with your **workspace bearer token**. |
+| **Convocore API** | Backend at `https://{region}-api.vg-stuff.com/v3` (see [Regions](#api-regions-and-base-urls)). Your `WORKSPACE_SECRET` is sent as `Authorization: Bearer …`. |
 
-This repository is **not** a chat UI. It is the **bridge** between an MCP-capable assistant and ConvoCore.
+This repository is **not** a chat UI. It is the **bridge** between an MCP-capable assistant and Convocore.
 
 ---
 
 ## What the server exposes (capabilities)
 
-The server declares **tools only** (no MCP resources or prompts in code). Each successful tool call returns MCP **content** with a single **text** part whose body is **pretty-printed JSON** (`JSON.stringify(result, null, 2)`) from the ConvoCore API response.
+The server declares **tools only** (no MCP resources or prompts in code). Each successful tool call returns MCP **content** with a single **text** part whose body is **pretty-printed JSON** (`JSON.stringify(result, null, 2)`) from the Convocore API response.
 
 | Area | Tools | Purpose |
 |------|-------|---------|
@@ -38,15 +38,15 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 ## How it runs (transport and lifecycle)
 
 1. The **host** (Claude Desktop, Cursor, etc.) starts the server as a subprocess: e.g. `npx -y convocore-mcp`, `docker run …`, or `node dist/index.js`.
-2. Communication uses **`StdioServerTransport`**: JSON-RPC messages on stdin/stdout. **Do not** write logs to stdout; the server logs to **stderr** (e.g. `ConvoCore MCP Server running on stdio`).
+2. Communication uses **`StdioServerTransport`**: JSON-RPC messages on stdin/stdout. **Do not** write logs to stdout; the server logs to **stderr** (e.g. `Convocore MCP Server running on stdio`).
 3. On startup, `getConfig()` reads env vars. If `WORKSPACE_SECRET` is missing, the process **throws** and exits.
-4. The host sends `tools/list` and `tools/call`. Each call is validated, then `ConvoCoreClient` performs `fetch()` to the REST API.
+4. The host sends `tools/list` and `tools/call`. Each call is validated, then `ConvocoreClient` performs `fetch()` to the REST API.
 
 ```mermaid
 flowchart LR
   Host[MCP host]
   MCP[convocore-mcp stdio]
-  API[ConvoCore REST API v3]
+  API[Convocore REST API v3]
   Host <--> MCP
   MCP --> API
 ```
@@ -74,7 +74,7 @@ flowchart LR
 
 | Variable | Required | Default | Meaning |
 |----------|----------|---------|---------|
-| `WORKSPACE_SECRET` | **Yes** | — | Bearer token for the ConvoCore workspace (same as API key/secret from your dashboard). |
+| `WORKSPACE_SECRET` | **Yes** | — | Bearer token for the Convocore workspace (same as API key/secret from your dashboard). |
 | `CONVOCORE_API_REGION` | No | `eu-gcp` | `eu-gcp` or `na-gcp`; selects API host (see below). |
 | `CONVOCORE_API_BASE_URL` | No | — | Optional full REST base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. The `/interact` WebSocket URL is derived from this (scheme swapped to `ws/wss`, path replaced with `/interact`) unless `CONVOCORE_INTERACT_WS_URL` is also set. |
 | `CONVOCORE_INTERACT_WS_URL` | No | — | Optional explicit override for **only** the `/interact` WebSocket URL, e.g. `ws://localhost:5000/interact`. Set this when you want REST traffic on prod but WebSocket traffic on a local debug server (or vice-versa). Used verbatim — supply scheme, host, port, and path. |
@@ -95,7 +95,7 @@ For local development, set `CONVOCORE_API_BASE_URL=http://localhost:5000/v3` to 
 
 ## Authentication
 
-Every request from `ConvoCoreClient` includes:
+Every request from `ConvocoreClient` includes:
 
 - `Authorization: Bearer <WORKSPACE_SECRET>`
 - `Content-Type: application/json`
@@ -108,7 +108,7 @@ Non-OK responses: body is parsed as JSON; `message` is thrown as an error when p
 
 ### Prerequisites
 
-- A ConvoCore **workspace secret** (`WORKSPACE_SECRET`).
+- A Convocore **workspace secret** (`WORKSPACE_SECRET`).
 - Optional: correct **region** (`eu-gcp` / `na-gcp`).
 - **Node.js 20+** (ships with `npx`). Docker is optional and only needed for the container workflow.
 
@@ -251,15 +251,16 @@ curl -sS -X POST https://mcp.convocore.ai/v1/install-links \
     "mcpUrl": "https://mcp.convocore.ai/mcp",
     "workspaceSecret": "vg_…",
     "region": "na-gcp",
-    "name": "ConvoCore"
+    "workspaceName": "Acme Agency"
   }'
 ```
 
-Response highlights:
+Response highlights — connector / install `name` defaults to **`Convocore {workspaceName}`** (e.g. `Convocore Acme Agency`) for Claude, Cursor, and other hosts:
 
 | Field | Use |
 |-------|-----|
-| `cursor.deeplink` | **Add to Cursor** — true one-click (`cursor://…/mcp/install` with URL + `Authorization` + `X-ConvoCore-Region` in base64 config) |
+| `name` | Display name used in Claude `connectorName`, Cursor deeplink `name`, Claude Desktop key |
+| `cursor.deeplink` | **Add to Cursor** — true one-click (`cursor://…/mcp/install` with URL + `Authorization` + `X-Convocore-Region` in base64 config) |
 | `cursor.webFallback` | `https://cursor.com/en/install-mcp?…` if the protocol handler is not registered yet |
 | `claude.installUrl` | **Add to Claude** — opens the official prefilled custom-connector modal |
 | `claude.connectorUrl` | `/t/<base64url(secret)>/mcp?region=…` (path keeps the secret after Claude strips `?token=` from OAuth `resource`) |
@@ -269,7 +270,7 @@ Response highlights:
 
 - Cursor deeplinks embed headers in base64 — secret travels with the install.
 - Claude’s install URL only prefills **name + connector URL**. No header query params exist.
-- Claude then runs **OAuth Dynamic Client Registration** against the MCP host. Without `/oauth/register` + authorize/token, you get *“Couldn't register with ConvoCore’s sign-in service”*.
+- Claude then runs **OAuth Dynamic Client Registration** against the MCP host. Without `/oauth/register` + authorize/token, you get *“Couldn't register with Convocore’s sign-in service”*.
 - Hosted MCP implements that OAuth AS. Claude often strips `?token=` from OAuth `resource`, so the secret is in the **path** (`/t/…/mcp`). Authorize shows a one-click **Connect** page (auto-submits) — no paste. Access tokens **are** the workspace secret, `expires_in` ≈ **10 years**, plus refresh.
 - MCP transport sessions idle-evict after ~**1 year** by default (`CONVOCORE_HOSTED_SESSION_IDLE_MS=0` disables eviction). Reconnect recreates a session with the same secret.
 
@@ -289,6 +290,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `create_agent_from_template` | POST workflow | **Preferred**: explicit `systemPrompt` / branding / merged `voiceConfig`; optional `sourceUrl` scrape + KB; then `POST /agents`; response includes **full agent** via follow-up `get_agent` |
 | `get_agent` | GET | `/agents/{agentId}` |
 | `update_agent` | PATCH | `/agents/{agentId}` body `{ agent: { … } }` |
+| `patch_agent_prompt` | GET+PATCH | `get_agent` then exact `old_string`→`new_string` on prompt/CSS field (Cursor StrReplace-style); PATCH only the changed fields |
 | `delete_agent` | DELETE | `/agents/{agentId}` |
 | `list_agents` | GET | `/agents` optional `?limit=` when supported |
 | `search_agents` | GET | `/agents/search?workspaceId=…&page&limit&sortBy&starredOnly&search?` (workspace resolved internally from MCP config/workspace secret context) |
@@ -312,6 +314,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `list_kb_docs` | GET | `/agents/{agentId}/kb?page&pageSize` |
 | `get_kb_doc` | GET | `/agents/{agentId}/kb/{docId}` |
 | `update_kb_doc` | PATCH | `/agents/{agentId}/kb/{docId}` |
+| `patch_kb_doc` | GET+PATCH | `get_kb_doc` then exact `old_string`→`new_string` on `content`/`name` (Cursor StrReplace-style) |
 | `delete_kb_doc` | DELETE | `/agents/{agentId}/kb/{docId}` |
 | `get_kb_stats` | GET | `/agents/{agentId}/kb/stats` |
 | `scrape_url` | HTTP ping or crawler | `mode=check` (default): fast status for up to 20 URLs/images; `mode=scrape`: full page scrape (1 URL) |
@@ -334,12 +337,14 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 **`create_agent`** — Legacy direct mode for advanced/manual payload control. Required: `title`. Optional: `description`, `theme`, `disabled`, `light`, `enableVertex`, `autoOpenWidget`, `voiceConfig`, **`nodes`**, `additionalConfig`.
 
 - Prefer `create_agent_from_template` unless you intentionally need low-level manual field control.
-- **`nodes`:** ConvoCore’s multi-step graph; **`nodes[0].instructions`** is the **main system prompt**.
+- **`nodes`:** Convocore’s multi-step graph; **`nodes[0].instructions`** is the **main system prompt**.
 - **`additionalConfig`:** Plain object merged into the `agent` payload (same level as other fields). Use for fields not listed explicitly.
 
 **`get_agent`** — Required: `agentId`. Response includes agent JSON; main prompt is under `nodes[0].instructions` when present.
 
-**`update_agent`** — Required: `agentId`. Optional: same agent fields as create; patch semantics depend on API. To change the main prompt, update **`nodes[0].instructions`**.
+**`update_agent`** — Required: `agentId`. Optional: same agent fields as create; patch semantics depend on API. To change the main prompt, update **`nodes[0].instructions`**. For large prompts prefer **`patch_agent_prompt`**.
+
+**`patch_agent_prompt`** — Cursor-style surgical edit. Required: `agentId`, `old_string`, `new_string`. Optional: `replace_all`, `target` (`auto`|`nodes0`|`vg_instructions`|`vg_systemPrompt`|`proactiveMessage`|`customCSS`), `sync_mirrors` (default true). Fails if `old_string` is missing or ambiguous (unless `replace_all`).
 
 **`delete_agent`** — Required: `agentId`. Permanent deletion on the API side.
 
@@ -365,7 +370,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`get_kb_docs_bulk`** — Required: `agentId`, `docIds` (1–30). Optional `includeContent` (default false).
 
-**`create_conversation`** — Required: `agentId`, `conversation`. The API expects at least a **`ts`** (timestamp) in the conversation object; you may add `userName`, `userEmail`, etc. per your ConvoCore setup.
+**`create_conversation`** — Required: `agentId`, `conversation`. The API expects at least a **`ts`** (timestamp) in the conversation object; you may add `userName`, `userEmail`, etc. per your Convocore setup.
 
 **`get_conversation`** — Required: `agentId`, `convoId`.
 
@@ -381,7 +386,7 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 ### Knowledge base tools
 
-Tool descriptions in code note **“VG agents only”** — KB operations target `/agents/{id}/kb` and may only apply to supported agent types on the ConvoCore side.
+Tool descriptions in code note **“VG agents only”** — KB operations target `/agents/{id}/kb` and may only apply to supported agent types on the Convocore side.
 
 **`create_kb_from_urls`** — **Preferred for many pages.** Required: `agentId`, `urls` (max **50**). Optional: `mode` (`per_url` default | `batch`), `name`, `tags`, `refreshRate` (`3d`|`7d`|`never`), `scrapeContent` (default true), `skipExisting` (default true). Uses the KB router to scrape — do **not** pre-scrape with `scrape_url` / web fetch. Scraping is async; poll `list_kb_docs` / `get_kb_doc`.
 
@@ -391,13 +396,15 @@ Tool descriptions in code note **“VG agents only”** — KB operations target
 - **`url`:** use `urls` (array), optional `scrapeContent`.
 - **`sitemap`:** use `sitemapUrl`, optional `maxPages`.
 
-Optional: `metadata`, `tags`, `refreshRate` — `3d` | `7d` | `never` (default `never`; matches ConvoCore API).
+Optional: `metadata`, `tags`, `refreshRate` — `3d` | `7d` | `never` (default `never`; matches Convocore API).
 
 **`list_kb_docs`** — Required: `agentId`. Optional: `page` (default 1), `pageSize` (default 20).
 
 **`get_kb_doc`** — Required: `agentId`, `docId`.
 
-**`update_kb_doc`** — Required: `agentId`, `docId`. Optional: `name`, `content`, `metadata`, `tags`, `refreshRate`, `url`.
+**`update_kb_doc`** — Required: `agentId`, `docId`. Optional: `name`, `content`, `metadata`, `tags`, `refreshRate`, `url`. For large bodies prefer **`patch_kb_doc`**.
+
+**`patch_kb_doc`** — Cursor-style surgical edit. Required: `agentId`, `docId`, `old_string`, `new_string`. Optional: `replace_all`, `field` (`content`|`name`, default `content`).
 
 **`delete_kb_doc`** — Required: `agentId`, `docId`.
 
@@ -407,7 +414,7 @@ Optional: `metadata`, `tags`, `refreshRate` — `3d` | `7d` | `never` (default `
 
 **`scrape_url`** — Provide `url` and/or `urls` (max **20**).  
 - **`mode: "check"` (default):** fast HTTP ping — status (200/404/…), `ok`, content-type, final URL after redirects. Use to verify images, logos, and page links before wiring them into an agent.  
-- **`mode: "scrape"`:** full ConvoCore crawler scrape of **one** URL (waits up to ~120s) for text/colours/favicon. Workspace resolved internally. Not for KB ingest (`create_kb_from_urls`).
+- **`mode: "scrape"`:** full Convocore crawler scrape of **one** URL (waits up to ~120s) for text/colours/favicon. Workspace resolved internally. Not for KB ingest (`create_kb_from_urls`).
 
 ### Interact (WebSocket) tool
 
@@ -472,7 +479,7 @@ When the agent has `vg_enableUIEngine: true` (and the request did not pass `disa
 
 The eight UI Engine message types are `text`, `choice`, `visual`, `cardV2`, `carousel`, `iFrame`, `form`, `input`. **`form` and `input` are emitted only on web channels** (`web-chat` / `text` origin). Call **`get_ui_engine_spec`** before testing or building UI-Engine-enabled agents to load the full schema.
 
-> **Cost note:** every call runs a real agent turn (LLM + voice + tools) and consumes ConvoCore credits exactly like a normal chat. It is not a dry-run.
+> **Cost note:** every call runs a real agent turn (LLM + voice + tools) and consumes Convocore credits exactly like a normal chat. It is not a dry-run.
 
 ### UI Engine spec tool
 
@@ -489,7 +496,7 @@ Use this BEFORE:
 
 ---
 
-## ConvoCore concepts: nodes and prompts
+## Convocore concepts: nodes and prompts
 
 - Each **node** can represent a step in a workflow.
 - The **first node** (`nodes[0]`) holds the **primary instructions** (`instructions` field) that define default agent behavior.
@@ -510,7 +517,7 @@ Use this BEFORE:
 
 After configuration, users can ask their assistant things like:
 
-- “List all my ConvoCore agents” → `list_agents`
+- “List all my Convocore agents” → `list_agents`
 - “Create an agent for this website from scratch” → `create_agent_from_template` (preferred default)
 - “Export all conversations for agent … as CSV” → `export_all_conversations`
 - “Add many hotel/site pages to the KB” → `create_kb_from_urls` (KB router scrapes; do not web-fetch first)
@@ -581,13 +588,13 @@ MIT License — see the `LICENSE` file.
 
 ## Links
 
-- [ConvoCore API / product docs](https://convocore.ai/docs)
+- [Convocore API / product docs](https://convocore.ai/docs)
 - [Model Context Protocol](https://modelcontextprotocol.io)
 - [npm — convocore-mcp](https://www.npmjs.com/package/convocore-mcp)
 - [Docker Hub — moe003/convocore-mcp](https://hub.docker.com/r/moe003/convocore-mcp)
 - [Issues](https://github.com/moe003/convocore-mcp/issues)
-- [ConvoCore support](https://convocore.ai/support)
+- [Convocore support](https://convocore.ai/support)
 
 ---
 
-Built for the ConvoCore community.
+Built for the Convocore community.
