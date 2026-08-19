@@ -100,6 +100,31 @@ export const UI_ENGINE_SPEC = {
       forcePlainText: 'Pass disableUiEngine: true on the InteractObject to bypass UI Engine for one turn.',
       requiresAgentFlag: 'vg_enableUIEngine must be true on the agent doc.',
     },
+    agentFeatureFlags: {
+      description:
+        'Configure via create_agent / update_agent which UI Engine elements this agent is allowed to emit. Master switch is vg_enableUIEngine; forms/invoice/calendar need their own flags too.',
+      flags: {
+        vg_enableUIEngine: 'Master switch for structured UI (choice/buttons, visual, cardV2, carousel, iFrame, …).',
+        vg_enableUIEngineForms: 'Allow form + input message types (web).',
+        vg_enableUIEngineInvoice: 'Allow invoice cards (web).',
+        vg_enableUIEngineCalendarBooking: 'Allow calendar booking widget (web; needs Google Calendar config).',
+        vg_maxImagesPerCard: '1 | 2 | 3 — max images per cardV2/carousel card.',
+        vg_uiEngineChannelConfig:
+          'Per-channel type allowlist: { web|whatsapp|instagram|messenger|telegram: { choice?, visual?, cardV2?, carousel?, iFrame?, form?, input?, invoice?, calendarBooking?, …: boolean } }. Missing key = enabled.',
+        vg_uiEngineFormNotifyConfig: '{ enabled?, extraEmails? } — email on form submit.',
+        vg_uiEngineInvoiceConfig: '{ notifyOnButtonClick?, notifyEmails? }.',
+        vg_uiEngineCalendarConfig: '{ connectionId?, calendarId?, timezoneMode?, … }.',
+      },
+      exampleUpdateAgent: {
+        vg_enableUIEngine: true,
+        vg_enableUIEngineForms: true,
+        vg_enableUIEngineInvoice: false,
+        vg_uiEngineChannelConfig: {
+          web: { choice: true, cardV2: true, carousel: true, form: true, invoice: false },
+          whatsapp: { choice: true, cardV2: true, form: false },
+        },
+      },
+    },
     channelGating: {
       formAndInputOnlyOn: ['web-chat', 'text'],
       reason:

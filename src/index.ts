@@ -170,6 +170,231 @@ const AgentVoiceConfigSchema = z
   })
   .passthrough();
 
+/**
+ * Agent-level UI Engine feature flags + per-channel element allowlist.
+ * Master switch: vg_enableUIEngine. Forms / invoice / calendar also need their
+ * dedicated flags. Channel keys omitted = enabled for that type.
+ */
+const UiEngineChannelTypeFlagsSchema = z
+  .record(z.boolean())
+  .optional()
+  .describe(
+    'Per message-type toggles for one channel. Keys include: choice, visual, cardV2, carousel, iFrame, form, input, invoice, calendarBooking, file, VoiceNote, locationRequest, ctaUrl. Missing key = enabled.'
+  );
+
+const UiEngineChannelConfigSchema = z
+  .object({
+    web: UiEngineChannelTypeFlagsSchema,
+    whatsapp: UiEngineChannelTypeFlagsSchema,
+    instagram: UiEngineChannelTypeFlagsSchema,
+    messenger: UiEngineChannelTypeFlagsSchema,
+    telegram: UiEngineChannelTypeFlagsSchema,
+  })
+  .passthrough()
+  .optional()
+  .describe(
+    'Per-channel UI Engine element allowlist. Master switch is still vg_enableUIEngine. form/input also require vg_enableUIEngineForms; invoice requires vg_enableUIEngineInvoice; calendarBooking requires vg_enableUIEngineCalendarBooking.'
+  );
+
+const AgentUiEngineFieldsSchema = z.object({
+  vg_enableUIEngine: z
+    .boolean()
+    .optional()
+    .describe(
+      'Master switch for structured UI Engine output (cards, buttons/choice, carousels, visuals, iFrames, etc.). When true, /interact returns UI Engine snapshots unless disableUiEngine=true is passed for a turn. Call get_ui_engine_spec for the message schema.'
+    ),
+  vg_enableUIEngineForms: z
+    .boolean()
+    .optional()
+    .describe(
+      'Allow UI Engine form + input elements (web channel). Also toggle form/input under vg_uiEngineChannelConfig.web when configuring per-channel.'
+    ),
+  vg_enableUIEngineInvoice: z
+    .boolean()
+    .optional()
+    .describe(
+      'Allow UI Engine invoice cards (web). Pair with vg_uiEngineInvoiceConfig for notify emails on button click.'
+    ),
+  vg_enableUIEngineCalendarBooking: z
+    .boolean()
+    .optional()
+    .describe(
+      'Allow UI Engine interactive calendar booking widget (web). Requires Google Calendar connection + vg_uiEngineCalendarConfig.connectionId/calendarId.'
+    ),
+  vg_maxImagesPerCard: z
+    .union([z.literal(1), z.literal(2), z.literal(3)])
+    .optional()
+    .describe(
+      'Max images per cardV2/carousel card. 1 = single imageUrl only (no images[] gallery). 2–3 allow images[] up to that count. Omit for platform default (up to 3).'
+    ),
+  vg_uiEngineChannelConfig: UiEngineChannelConfigSchema,
+  vg_uiEngineFormNotifyConfig: z
+    .object({
+      enabled: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true (default if unset), form/input submits and chat-end ratings email workspace members + assigned org clients.'
+        ),
+      extraEmails: z
+        .array(z.string())
+        .max(10)
+        .optional()
+        .describe('Up to 10 extra notification recipients beyond workspace/org defaults.'),
+    })
+    .optional()
+    .describe('Email notification settings for UI Engine forms/inputs.'),
+  vg_uiEngineInvoiceConfig: z
+    .object({
+      notifyOnButtonClick: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, invoice action button clicks email notifyEmails (chat summary + invoice + contact + convo link).'
+        ),
+      notifyEmails: z
+        .array(z.string())
+        .optional()
+        .describe('Recipients for invoice button-click notifications.'),
+    })
+    .optional()
+    .describe('Post-booking/payment notification config for invoice cards.'),
+  vg_uiEngineCalendarConfig: z
+    .object({
+      connectionId: z
+        .string()
+        .optional()
+        .describe('Google Calendar connection ID for availability + booking.'),
+      calendarId: z
+        .string()
+        .optional()
+        .describe('Calendar ID within the connected Google account.'),
+      timezoneMode: z
+        .enum(['auto', 'fixed'])
+        .optional()
+        .describe('auto = detect visitor timezone; fixed = use fixedTimezone.'),
+      fixedTimezone: z
+        .string()
+        .optional()
+        .describe('IANA timezone when timezoneMode is fixed.'),
+      defaultDurationMinutes: z
+        .number()
+        .optional()
+        .describe('Default meeting duration in minutes (often 30).'),
+      bufferMinutes: z
+        .number()
+        .optional()
+        .describe('Buffer minutes between booked events.'),
+      daysAhead: z
+        .number()
+        .optional()
+        .describe('How many days ahead visitors may book.'),
+      suggestedFields: z
+        .array(
+          z.object({
+            id: z.string(),
+            type: z.string(),
+            label: z.string(),
+            required: z.boolean().optional(),
+          })
+        )
+        .optional()
+        .describe('Confirmation fields (name, email, …) collected after a slot is picked.'),
+    })
+    .optional()
+    .describe('Calendar booking widget configuration.'),
+});
+
+/** JSON Schema props shared by create_agent / update_agent tool definitions. */
+const AgentUiEngineInputSchemaProperties = {
+  vg_enableUIEngine: {
+    type: 'boolean',
+    description:
+      'MASTER SWITCH for UI Engine. When true the agent can emit structured UI (text, choice/buttons, visual, cardV2, carousel, iFrame, and — if their flags are on — form/input, invoice, calendarBooking). Call get_ui_engine_spec for payloads. Prefer enabling this before toggling individual elements.',
+  },
+  vg_enableUIEngineForms: {
+    type: 'boolean',
+    description:
+      'Allow form + input UI Engine elements (typically web). Set true to let the agent collect structured fields. Also set vg_uiEngineChannelConfig.web.form / .input as needed.',
+  },
+  vg_enableUIEngineInvoice: {
+    type: 'boolean',
+    description:
+      'Allow invoice card UI Engine elements (web). Use with vg_uiEngineInvoiceConfig for click notifications.',
+  },
+  vg_enableUIEngineCalendarBooking: {
+    type: 'boolean',
+    description:
+      'Allow interactive calendar booking widget (web). Requires Google Calendar connectionIds in vg_uiEngineCalendarConfig.',
+  },
+  vg_maxImagesPerCard: {
+    type: 'number',
+    enum: [1, 2, 3],
+    description:
+      'Max images per cardV2/carousel card: 1 = imageUrl only; 2–3 allow images[] gallery. Omit for platform default.',
+  },
+  vg_uiEngineChannelConfig: {
+    type: 'object',
+    description:
+      'Per-channel allowlist of which UI Engine elements the agent may show. Channels: web, whatsapp, instagram, messenger, telegram. Each channel is an object of type→boolean (choice, visual, cardV2, carousel, iFrame, form, input, invoice, calendarBooking, file, VoiceNote, locationRequest, ctaUrl). Missing type = enabled. Example: { "web": { "choice": true, "cardV2": true, "form": true, "invoice": false }, "whatsapp": { "choice": true, "cardV2": true, "form": false } }. Forms/invoice/calendar still need their global vg_enableUIEngine* flags.',
+    properties: {
+      web: { type: 'object', additionalProperties: { type: 'boolean' } },
+      whatsapp: { type: 'object', additionalProperties: { type: 'boolean' } },
+      instagram: { type: 'object', additionalProperties: { type: 'boolean' } },
+      messenger: { type: 'object', additionalProperties: { type: 'boolean' } },
+      telegram: { type: 'object', additionalProperties: { type: 'boolean' } },
+    },
+    additionalProperties: true,
+  },
+  vg_uiEngineFormNotifyConfig: {
+    type: 'object',
+    description: 'Email notify settings when forms/inputs are submitted.',
+    properties: {
+      enabled: { type: 'boolean', description: 'Email workspace/org on form submit + chat-end ratings (default true if unset).' },
+      extraEmails: {
+        type: 'array',
+        items: { type: 'string' },
+        maxItems: 10,
+        description: 'Up to 10 extra recipients.',
+      },
+    },
+  },
+  vg_uiEngineInvoiceConfig: {
+    type: 'object',
+    description: 'Invoice card notification settings.',
+    properties: {
+      notifyOnButtonClick: { type: 'boolean', description: 'Email notifyEmails when an invoice action button is clicked.' },
+      notifyEmails: { type: 'array', items: { type: 'string' }, description: 'Invoice notification recipients.' },
+    },
+  },
+  vg_uiEngineCalendarConfig: {
+    type: 'object',
+    description: 'Calendar booking widget config (Google Calendar connection + booking rules).',
+    properties: {
+      connectionId: { type: 'string', description: 'Google Calendar connection ID.' },
+      calendarId: { type: 'string', description: 'Calendar ID to book against.' },
+      timezoneMode: { type: 'string', enum: ['auto', 'fixed'] },
+      fixedTimezone: { type: 'string', description: 'IANA timezone when timezoneMode=fixed.' },
+      defaultDurationMinutes: { type: 'number' },
+      bufferMinutes: { type: 'number' },
+      daysAhead: { type: 'number' },
+      suggestedFields: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            type: { type: 'string' },
+            label: { type: 'string' },
+            required: { type: 'boolean' },
+          },
+          required: ['id', 'type', 'label'],
+        },
+      },
+    },
+  },
+} as const;
+
 const CreateAgentSchema = z.object({
   title: z.string().describe('The title of the agent'),
   description: z.string().optional().describe('A brief description of the agent'),
@@ -180,11 +405,10 @@ const CreateAgentSchema = z.object({
   autoOpenWidget: z.boolean().optional().describe('Auto-open widget on load'),
   enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
   vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
-  vg_enableUIEngine: z.boolean().optional().describe('Enable structured UI Engine responses for this agent'),
   voiceConfig: AgentVoiceConfigSchema.optional().describe('Agent voice configuration for transcription, speech generation, and call settings'),
   nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions is the canonical main/system prompt'),
   additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; not a primary API concept'),
-});
+}).merge(AgentUiEngineFieldsSchema);
 
 const HexColorSchema = z
   .string()
@@ -288,11 +512,10 @@ const UpdateAgentSchema = z.object({
   autoOpenWidget: z.boolean().optional().describe('Updated auto-open widget setting'),
   enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
   vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
-  vg_enableUIEngine: z.boolean().optional().describe('Enable or disable structured UI Engine responses for this agent'),
   voiceConfig: AgentVoiceConfigSchema.optional().describe('Updated agent voice configuration'),
   nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions updates the canonical main/system prompt'),
   additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; use explicit fields when available'),
-});
+}).merge(AgentUiEngineFieldsSchema);
 
 const DeleteAgentSchema = z.object({
   agentId: z.string().describe('The unique identifier of the agent to delete'),
@@ -2612,7 +2835,8 @@ const tools: Tool[] = [
     name: 'create_agent',
     description:
       'Create a new Convocore AI agent directly from supplied fields (legacy/raw mode). For new branded chat+voice agents, use scrape_url + create_agent_from_template with explicit prompts and voiceConfig. Use this tool only for manual/advanced direct payload control. ' +
-      'New agents MUST use chat model gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). Fallback: gemini-3.1-flash-lite. Do not pick gpt-4o / gpt-4o-mini / other legacy models.',
+      'New agents MUST use chat model gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). Fallback: gemini-3.1-flash-lite. Do not pick gpt-4o / gpt-4o-mini / other legacy models. ' +
+      'UI Engine: set vg_enableUIEngine plus optional forms/invoice/calendar flags and vg_uiEngineChannelConfig to control which UI elements (cards, buttons, forms, invoice, …) the agent may emit.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2654,11 +2878,7 @@ const tools: Tool[] = [
           description:
             'Legacy main prompt field for old/non-node agents. For modern enableNodes=true agents, use nodes[0].instructions instead.',
         },
-        vg_enableUIEngine: {
-          type: 'boolean',
-          description:
-            'Enable structured UI Engine output for this agent. When true, /interact returns UI Engine snapshots unless disableUiEngine=true is passed for a turn. Call get_ui_engine_spec for the full message schema.',
-        },
+        ...AgentUiEngineInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
@@ -2669,7 +2889,7 @@ const tools: Tool[] = [
         additionalConfig: {
           type: 'object',
           description:
-            'Escape hatch for raw agent fields not modeled by this MCP yet. This is not a primary Convocore concept; prefer explicit fields like enableNodes, vg_instructions, vg_enableUIEngine, nodes, and voiceConfig. Never set read-only fields like ownerID here.',
+            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit fields including UI Engine flags (vg_enableUIEngine*, vg_uiEngineChannelConfig, …). Never set read-only fields like ownerID here.',
         },
       },
       required: ['title'],
@@ -2782,7 +3002,10 @@ const tools: Tool[] = [
   {
     name: 'update_agent',
     description:
-      'Update an existing Convocore agent (full-field PATCH). CRITICAL: for large prompts prefer patch_agent_prompt (Cursor-style exact old_string→new_string) instead of rewriting the entire instructions string. Prompt rule: if enableNodes=true, main prompt is nodes[0].instructions; if legacy, vg_instructions. ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
+      'Update an existing Convocore agent (full-field PATCH). CRITICAL: for large prompts prefer patch_agent_prompt (Cursor-style exact old_string→new_string) instead of rewriting the entire instructions string. ' +
+      'Prompt rule: if enableNodes=true, main prompt is nodes[0].instructions; if legacy, vg_instructions. ' +
+      'UI Engine elements: use vg_enableUIEngine (master) plus vg_enableUIEngineForms / vg_enableUIEngineInvoice / vg_enableUIEngineCalendarBooking and vg_uiEngineChannelConfig to control which UI the agent may show (choice buttons, cards, carousels, forms, invoice, calendar, etc.). Call get_ui_engine_spec for message payloads. ' +
+      'ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2828,11 +3051,7 @@ const tools: Tool[] = [
           description:
             'Legacy main prompt for old/non-node agents. Only use as the main prompt when enableNodes=false or nodes are absent.',
         },
-        vg_enableUIEngine: {
-          type: 'boolean',
-          description:
-            'Enable/disable structured UI Engine output for this agent. When true, /interact returns UI Engine snapshots unless disableUiEngine=true is passed for a turn. Call get_ui_engine_spec for the full message schema.',
-        },
+        ...AgentUiEngineInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
@@ -2843,7 +3062,7 @@ const tools: Tool[] = [
         additionalConfig: {
           type: 'object',
           description:
-            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit fields. Never set read-only fields like ownerID/workspaceId here.',
+            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit UI Engine fields (vg_enableUIEngine*, vg_uiEngineChannelConfig, vg_uiEngine*Config) over stuffing them here. Never set read-only fields like ownerID/workspaceId here.',
         },
       },
       required: ['agentId'],
@@ -4350,8 +4569,9 @@ const tools: Tool[] = [
       "Return the FULL Convocore UI Engine schema (the structured message format agents emit when `vg_enableUIEngine: true`). " +
       "ALWAYS CALL THIS FIRST when: " +
       "(a) testing a UI-Engine-enabled agent via `interact_with_agent` and you need to validate the output, OR " +
-      "(b) creating / updating an agent that should produce UI Engine output (so the system prompt teaches the LLM to emit valid `text` / `choice` / `visual` / `cardV2` / `carousel` / `iFrame` / `form` / `input` messages). " +
-      "Returns: meta (streaming + channel-gating semantics), envelopes (TurnProps / ChatMessage), messageTypes (every UiEngineMessage shape with payload fields and examples), shared types (UiEngineButton, UiEngineInputField), rules, and a validationChecklist. " +
+      "(b) creating / updating an agent that should produce UI Engine output (so the system prompt teaches the LLM to emit valid `text` / `choice` / `visual` / `cardV2` / `carousel` / `iFrame` / `form` / `input` / invoice / calendarBooking messages). " +
+      "Also documents agent feature flags (vg_enableUIEngineForms, vg_enableUIEngineInvoice, vg_enableUIEngineCalendarBooking, vg_uiEngineChannelConfig) used by update_agent to allow/deny which UI elements the agent may show. " +
+      "Returns: meta (streaming + channel-gating + agentFeatureFlags), envelopes (TurnProps / ChatMessage), messageTypes, shared types, rules, and a validationChecklist. " +
       "Use `section` to narrow the response: \"meta\" | \"envelopes\" | \"message_types\" | \"shared\" | \"rules\" | \"checklist\" | \"primer\" | \"all\" (default). " +
       "Use `messageType` to drill into a single message-type schema (e.g. \"choice\" or \"form\"). " +
       "Static knowledge — does NOT hit the API and does NOT consume credits.",
@@ -4417,7 +4637,7 @@ export function createMcpServer(options?: { name?: string; version?: string }): 
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
-    version: options?.version || '2.5.3',
+    version: options?.version || '2.5.4',
   },
   {
     capabilities: {

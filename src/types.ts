@@ -58,8 +58,27 @@ export interface Agent {
   enableNodes?: boolean;
   /** Legacy main prompt for old/non-node agents. */
   vg_instructions?: string;
-  /** Enables structured UI Engine output on /interact. */
+  /** Master switch for structured UI Engine output on /interact. */
   vg_enableUIEngine?: boolean;
+  /** Allow form + input UI Engine elements (web). */
+  vg_enableUIEngineForms?: boolean;
+  /** Allow invoice card UI Engine elements (web). */
+  vg_enableUIEngineInvoice?: boolean;
+  /** Allow calendar booking widget (web). */
+  vg_enableUIEngineCalendarBooking?: boolean;
+  /** Max images per cardV2/carousel card (1|2|3). */
+  vg_maxImagesPerCard?: 1 | 2 | 3;
+  /** Per-channel allowlist of UI Engine message types. */
+  vg_uiEngineChannelConfig?: Record<string, any>;
+  vg_uiEngineFormNotifyConfig?: {
+    enabled?: boolean;
+    extraEmails?: string[];
+  };
+  vg_uiEngineInvoiceConfig?: {
+    notifyOnButtonClick?: boolean;
+    notifyEmails?: string[];
+  };
+  vg_uiEngineCalendarConfig?: Record<string, any>;
   nodes?: Array<{ instructions?: string; name?: string; [key: string]: any }>;
   light?: boolean;
   enableVertex?: boolean;

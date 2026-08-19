@@ -146,6 +146,14 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 - \`interact_with_agent\` runs a **real** LLM turn (uses credits).
 - If \`uiEngineEnabled: true\`, read **\`uiEngineSummary\`** or \`uiEngineSnapshot\` — \`assistantText\` is often empty.
 - Call \`get_ui_engine_spec\` before validating or building UI-Engine output.
+- **Which UI elements the agent may show** is configured on the agent via \`update_agent\` / \`create_agent\`:
+  - \`vg_enableUIEngine\` — master switch (cards, choice/buttons, carousels, visuals, iFrames, …)
+  - \`vg_enableUIEngineForms\` — form + input
+  - \`vg_enableUIEngineInvoice\` — invoice cards
+  - \`vg_enableUIEngineCalendarBooking\` — calendar booking widget
+  - \`vg_uiEngineChannelConfig\` — per-channel allowlist (\`web\` / \`whatsapp\` / … → type→boolean)
+  - Optional: \`vg_maxImagesPerCard\`, \`vg_uiEngineFormNotifyConfig\`, \`vg_uiEngineInvoiceConfig\`, \`vg_uiEngineCalendarConfig\`
+- Example: enable cards+buttons on web, no forms: \`{ "vg_enableUIEngine": true, "vg_uiEngineChannelConfig": { "web": { "choice": true, "cardV2": true, "form": false } } }\`
 
 ---
 
@@ -280,6 +288,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.
 - **"Change widget colors / button look"** → CSS tools (\`get_widget_css_styling_guide\` → \`update_agent_custom_css\`).
+- **"Enable cards / buttons / forms / invoice on the agent"** → \`update_agent\` with \`vg_enableUIEngine\` + \`vg_enableUIEngineForms\` / \`vg_enableUIEngineInvoice\` / \`vg_enableUIEngineCalendarBooking\` + optional \`vg_uiEngineChannelConfig\`. Then \`get_ui_engine_spec\` for payloads.
 - **"Change what the agent says"** → for small/full rewrites \`update_agent\`; for large prompts \`patch_agent_prompt\` (\`old_string\`/\`new_string\`) → \`nodes[0].instructions\` or \`proactiveMessage\`.
 - **"Tweak one section of a big KB doc"** → \`get_kb_doc\` → \`patch_kb_doc\`.
 - **"Fix agent not answering in Arabic / wrong language"** → check \`lang\`, voice \`language\`, and main prompt — not the embed script alone.
