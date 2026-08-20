@@ -272,12 +272,22 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **Adding many website pages:** \`create_kb_from_urls\` (max 50 URLs). KB router scrapes (\`scrapeContent=true\`). Do **not** web-fetch / \`scrape_url\` then paste into \`create_kb_doc\`.
 - Whole site: \`create_kb_doc\` with \`sourceType=sitemap\`, \`sitemapUrl\`, \`maxPages\`, \`scrapeContent=true\`.
 - Single/manual: \`create_kb_doc\` (\`url\` + \`urls[]\` + scrape, or \`doc\` for raw text you already have).
+- Bulk create (≤20 docs): \`bulk_create_kb_docs\`. Images: \`create_kb_image\`. Quota: \`get_kb_quota\`. Semantic search: \`search_kb_docs\`. Bulk delete: \`bulk_delete_kb_docs\`.
 - \`refreshRate\` is \`3d\` | \`7d\` | \`never\` (not hourly).
 - Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
 - Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\`.
 - **Surgical KB edits:** for large docs use \`patch_kb_doc\` (\`old_string\` / \`new_string\`, same semantics as Cursor StrReplace) instead of rewriting full \`content\` via \`update_kb_doc\`.
 - **Validate links/images** (status 200/404, broken CDN, logo URLs): \`scrape_url\` with \`mode: "check"\` + \`urls: [...]\` (default mode). Fast ping — not a full scrape.
 - Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
+- **HTTP tools / variables:** CRUD via \`list_agent_tools\` / \`create_agent_tool\` / … and \`list_agent_variables\` / …. Test: \`test_agent_tool\` (WS toolTest), \`test_agent_tool_request\` (direct HTTP dry-run), \`run_agent_auto_test\` (suite). Trial vars with \`interact_with_agent\` + \`variablesOverrides\`.
+
+---
+
+## Orgs / clients / agency / leads
+
+- Hierarchy: \`agency_read\`/\`agency_write\` (agency account) → \`orgs_read\`/\`orgs_write\` (organizations + assign agents) → \`clients_read\`/\`clients_write\` (end-user client accounts).
+- CRM leads: \`leads_read\` / \`leads_write\` (list/get/export + create/update/import/magic_import/clear).
+- Unsure which tool: \`search_mcp_tools\` with a keyword (e.g. "leads", "tools", "clone").
 
 ---
 
@@ -286,11 +296,18 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
 - **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` → then embed tool) → paste \`html\` in reply.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
+- **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
+- **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create.
+- **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\`. Mutate with \`*_write\`.
+- **"CRM leads"** → \`leads_read\` / \`leads_write\`.
+- **"Add / test an HTTP tool or variable"** → \`create_agent_tool\` / \`create_agent_variable\` → \`test_agent_tool_request\` or \`test_agent_tool\` / \`run_agent_auto_test\`.
+- **"Which MCP tool do I use?"** → \`search_mcp_tools\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.
 - **"Change widget colors / button look"** → CSS tools (\`get_widget_css_styling_guide\` → \`update_agent_custom_css\`).
 - **"Enable cards / buttons / forms / invoice on the agent"** → \`update_agent\` with \`vg_enableUIEngine\` + \`vg_enableUIEngineForms\` / \`vg_enableUIEngineInvoice\` / \`vg_enableUIEngineCalendarBooking\` + optional \`vg_uiEngineChannelConfig\`. Then \`get_ui_engine_spec\` for payloads.
 - **"Change what the agent says"** → for small/full rewrites \`update_agent\`; for large prompts \`patch_agent_prompt\` (\`old_string\`/\`new_string\`) → \`nodes[0].instructions\` or \`proactiveMessage\`.
 - **"Tweak one section of a big KB doc"** → \`get_kb_doc\` → \`patch_kb_doc\`.
+- **"Search KB by meaning"** → \`search_kb_docs\`. Quota → \`get_kb_quota\`.
 - **"Fix agent not answering in Arabic / wrong language"** → check \`lang\`, voice \`language\`, and main prompt — not the embed script alone.
 
 **Slash prompt:** \`integrate_website_widget\` (pass \`agentId\` + optional \`mode\`) returns a copy-paste embed snippet with real IDs filled in.

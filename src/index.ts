@@ -55,6 +55,8 @@ import {
   type WidgetEmbedMode,
 } from './mcp-server-instructions.js';
 import { checkUrls } from './url-check.js';
+import { buildDomainTools } from './tools/index.js';
+import type { ToolHandler } from './tools/helpers.js';
 
 const execAsync = promisify(exec);
 
@@ -1317,6 +1319,12 @@ const InteractWithAgentSchema = z.object({
     .record(z.any())
     .optional()
     .describe('Optional overrides for tools / variables / messages history at session init.'),
+  variablesOverrides: z
+    .record(z.any())
+    .optional()
+    .describe(
+      'Create or override agent variables for this interact turn only (env/default values become visible to the agent without permanently PATCHing the variable).'
+    ),
   actionMetadata: z
     .object({ mid: z.string().optional() })
     .passthrough()
@@ -2829,8 +2837,8 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   };
 }
 
-// Define MCP tools
-const tools: Tool[] = [
+// Define MCP tools (core + domain modules)
+const coreTools: Tool[] = [
   {
     name: 'create_agent',
     description:
@@ -4427,7 +4435,9 @@ const tools: Tool[] = [
       "- `prompt: \"@rewind:<nodeId>\"` rewinds a node-based agent.\n" +
       "- For images, set messageType=\"visual\" and pass `visualPayload`.\n" +
       "- `bucket` is auto-derived from CONVOCORE_API_REGION; only override if you really mean to talk to the other region.\n" +
-      "- Set `raw: true` to include every streamed chunk (debug frames, chunkIndex, every UI Engine snapshot, etc.) when you need the full trace. Default keeps the response token-cheap.\n\n" +
+      "- Set `raw: true` to include every streamed chunk (debug frames, chunkIndex, every UI Engine snapshot, etc.) when you need the full trace. Default keeps the response token-cheap.\n" +
+      "- TESTING: set `isTest: true` for test chats. Pass `toolTest: { toolId, toolName, mode: validate|generate-and-test }` to exercise one HTTP tool (or use dedicated `test_agent_tool`). Pass `variablesOverrides` / `initNodesOptions` to trial variables without permanently changing them.\n" +
+      "- For a direct HTTP dry-run of a tool's serverUrl use `test_agent_tool_request`. For multi-turn suites use `run_agent_auto_test`.\n\n" +
       "INTERPRETING THE RESPONSE:\n" +
       "- When `uiEngineEnabled: false`, the agent streamed plain Markdown — read `assistantText`.\n" +
       "- When `uiEngineEnabled: true`, the agent streamed UI Engine snapshots — read `uiEngineSnapshot` (parsed final TurnProps) and `uiEngineSummary` (compact per-message summary). `assistantText` may be empty in this mode.\n" +
@@ -4542,6 +4552,11 @@ const tools: Tool[] = [
           type: 'object',
           description: 'Optional overrides for tools / variables / messages history at session init.',
         },
+        variablesOverrides: {
+          type: 'object',
+          description:
+            'Create or override agent variables for this interact turn only (without permanently PATCHing variables).',
+        },
         actionMetadata: {
           type: 'object',
           description: 'Includes mid (client-supplied message id) used for de-duplication.',
@@ -4632,12 +4647,20 @@ const tools: Tool[] = [
   },
 ];
 
+/** Full tool catalog: core + domain modules (orgs/leads/tools/variables/…). */
+let tools: Tool[] = [...coreTools];
+const { tools: domainTools, handlers: domainHandlers } = buildDomainTools(
+  () => tools
+);
+tools = [...coreTools, ...domainTools];
+const domainHandlerMap: Record<string, ToolHandler> = domainHandlers;
+
 // Create MCP server (shared by stdio + hosted transports)
 export function createMcpServer(options?: { name?: string; version?: string }): Server {
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
-    version: options?.version || '2.5.4',
+    version: options?.version || '2.6.0',
   },
   {
     capabilities: {
@@ -4811,6 +4834,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
+    const domainHandler = domainHandlerMap[name];
+    if (domainHandler) {
+      return await domainHandler(args);
+    }
+
     switch (name) {
       case 'create_agent': {
         const validated = CreateAgentSchema.parse(args);

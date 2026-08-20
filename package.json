@@ -1,6 +1,6 @@
 {
   "name": "convocore-mcp",
-  "version": "2.5.4",
+  "version": "2.6.0",
   "description": "MCP Server for Convocore AI Agents - run via npx in Claude Desktop, Cursor, and any MCP-compatible host",
   "type": "module",
   "main": "dist/index.js",

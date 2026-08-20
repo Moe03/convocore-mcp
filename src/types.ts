@@ -282,6 +282,8 @@ export interface InteractRequest {
   };
   formSubmissionMetadata?: Record<string, any>;
   initNodesOptions?: Record<string, any>;
+  /** Per-turn variable create/override (does not permanently PATCH variables). */
+  variablesOverrides?: Record<string, any>;
   [key: string]: any;
 }
 

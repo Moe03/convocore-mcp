@@ -26,12 +26,18 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 
 | Area | Tools | Purpose |
 |------|-------|---------|
-| Agents | 9 | CRUD, list, search, export/import template, usage stats |
-| Conversations | 8 | CRUD, list with pagination, export (JSON/CSV), assign to user |
-| Knowledge base | 7 | CRUD, list, stats, **`create_kb_from_urls`** mass ingest (VG agents) |
-| Scrape | 1 | Scrape one URL at a time and return the stored page result in the same tool call |
-| Interact (WS) | 1 | Drive one agent turn over the `/interact` WebSocket and aggregate the streamed result (plain Markdown **and** UI Engine snapshots) |
-| UI Engine | 1 | Static spec for the structured message format agents emit when `vg_enableUIEngine: true` |
+| Agents | ~12 | CRUD, list, search, export/import, clone, usage, CSS, patch prompt |
+| Conversations | ~12 | CRUD, list, export, assign, bulk/query, **channel send** |
+| Knowledge base | ~14 | CRUD, patch, bulk get/create/delete, URL ingest, search, images, quota |
+| Orgs / agency / clients | 6 | `orgs_read/write`, `agency_read/write`, `clients_read/write` |
+| Leads CRM | 2 | `leads_read` / `leads_write` (list, export, import, magic import, …) |
+| Agent HTTP tools | 5 | list/get/create/update/delete Convocore agent tools (not MCP tools) |
+| Agent variables | 5 | list/get/create/update/delete agent variables |
+| Testing | 3 | `test_agent_tool`, `test_agent_tool_request`, `run_agent_auto_test` |
+| Discovery | 1 | `search_mcp_tools` — find the right tool without guessing |
+| Scrape / embed / voice | many | scrape, embed code, voices, Twilio utils |
+| Interact (WS) | 1 | Drive one agent turn; supports `toolTest` + `variablesOverrides` |
+| Specs | 3 | UI Engine, channel integration, pricing |
 
 ---
 

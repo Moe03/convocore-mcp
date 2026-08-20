@@ -1568,5 +1568,656 @@ export class ConvocoreClient {
       });
     });
   }
+
+  // ==================== Orgs / Agency / Clients ====================
+
+  async listOrgs(opts?: { page?: number; pageSize?: number }): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.pageSize != null) q.set('pageSize', String(opts.pageSize));
+    const qs = q.toString();
+    return this.request(`/orgs${qs ? `?${qs}` : ''}`);
+  }
+
+  async searchOrgs(opts?: {
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.search) q.set('search', opts.search);
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.pageSize != null) q.set('pageSize', String(opts.pageSize));
+    const qs = q.toString();
+    return this.request(`/orgs/search${qs ? `?${qs}` : ''}`);
+  }
+
+  async getOrg(orgId: string): Promise<any> {
+    return this.request(`/orgs/${encodeURIComponent(orgId)}`);
+  }
+
+  async createOrg(body: {
+    name: string;
+    squarePhotoURL?: string;
+    email?: string;
+  }): Promise<any> {
+    return this.request('/orgs', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async updateOrg(orgId: string, org: Record<string, unknown>): Promise<any> {
+    return this.request(`/orgs/${encodeURIComponent(orgId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ org }),
+    });
+  }
+
+  async deleteOrg(orgId: string): Promise<any> {
+    return this.request(`/orgs/${encodeURIComponent(orgId)}`, { method: 'DELETE' });
+  }
+
+  async listOrgClients(
+    orgId: string,
+    opts?: { page?: number; pageSize?: number }
+  ): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.pageSize != null) q.set('pageSize', String(opts.pageSize));
+    const qs = q.toString();
+    return this.request(
+      `/orgs/${encodeURIComponent(orgId)}/clients${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async listOrgAgents(
+    orgId: string,
+    opts?: { page?: number; pageSize?: number }
+  ): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.pageSize != null) q.set('pageSize', String(opts.pageSize));
+    const qs = q.toString();
+    return this.request(
+      `/orgs/${encodeURIComponent(orgId)}/agents${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async listOrgMembersAndTeams(orgId: string): Promise<any> {
+    return this.request(`/orgs/${encodeURIComponent(orgId)}/members-and-teams`);
+  }
+
+  async assignOrgAgent(
+    orgId: string,
+    agentId: string,
+    action: 'assign' | 'unassign'
+  ): Promise<any> {
+    return this.request(
+      `/orgs/${encodeURIComponent(orgId)}/agents/${encodeURIComponent(agentId)}`,
+      { method: 'POST', body: JSON.stringify({ action }) }
+    );
+  }
+
+  async getAgentOrgClients(agentId: string): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/org-clients`);
+  }
+
+  async getAgency(): Promise<any> {
+    return this.request('/agency');
+  }
+
+  async upsertAgency(agency: Record<string, unknown>): Promise<any> {
+    return this.request('/agency', {
+      method: 'POST',
+      body: JSON.stringify({ agency }),
+    });
+  }
+
+  async deleteAgency(): Promise<any> {
+    return this.request('/agency', { method: 'DELETE' });
+  }
+
+  async listClients(opts?: {
+    orgId?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.orgId) q.set('orgId', opts.orgId);
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.pageSize != null) q.set('pageSize', String(opts.pageSize));
+    const qs = q.toString();
+    return this.request(`/clients${qs ? `?${qs}` : ''}`);
+  }
+
+  async getClient(clientId: string): Promise<any> {
+    return this.request(`/clients/${encodeURIComponent(clientId)}`);
+  }
+
+  async createClient(clientData: Record<string, unknown>): Promise<any> {
+    return this.request('/clients', {
+      method: 'POST',
+      body: JSON.stringify({ clientData }),
+    });
+  }
+
+  async updateClient(
+    clientId: string | undefined,
+    clientData: Record<string, unknown>
+  ): Promise<any> {
+    return this.request('/clients/update', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(clientId ? { clientId } : {}),
+        clientData,
+      }),
+    });
+  }
+
+  async deleteClient(clientId: string): Promise<any> {
+    return this.request(`/clients/${encodeURIComponent(clientId)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async checkClientEmail(body: {
+    email: string;
+    clientId?: string;
+    orgId?: string;
+  }): Promise<any> {
+    return this.request('/clients/check-email', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // ==================== Leads CRM ====================
+
+  async listLeads(opts: {
+    agentId: string;
+    cursor?: string;
+    limit?: number;
+    page?: number;
+  }): Promise<any> {
+    const q = new URLSearchParams();
+    q.set('agentId', opts.agentId);
+    if (opts.cursor) q.set('cursor', opts.cursor);
+    if (opts.limit != null) q.set('limit', String(opts.limit));
+    if (opts.page != null) q.set('page', String(opts.page));
+    return this.request(`/leads?${q.toString()}`);
+  }
+
+  async listAgentLeads(
+    agentId: string,
+    opts?: {
+      page?: number;
+      limit?: number;
+      groupName?: string;
+      searchTerm?: string;
+      searchField?: string;
+      propertyFilter?: string;
+      leadFilters?: string;
+    }
+  ): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.page != null) q.set('page', String(opts.page));
+    if (opts?.limit != null) q.set('limit', String(opts.limit));
+    if (opts?.groupName) q.set('groupName', opts.groupName);
+    if (opts?.searchTerm) q.set('searchTerm', opts.searchTerm);
+    if (opts?.searchField) q.set('searchField', opts.searchField);
+    if (opts?.propertyFilter) q.set('propertyFilter', opts.propertyFilter);
+    if (opts?.leadFilters) q.set('leadFilters', opts.leadFilters);
+    const qs = q.toString();
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/leads${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async getLead(id: string, agentId: string): Promise<any> {
+    const q = new URLSearchParams({ agentId });
+    return this.request(`/leads/${encodeURIComponent(id)}?${q.toString()}`);
+  }
+
+  async createLead(lead: Record<string, unknown>): Promise<any> {
+    return this.request('/leads', {
+      method: 'POST',
+      body: JSON.stringify({ lead }),
+    });
+  }
+
+  async updateLead(
+    id: string,
+    agentId: string,
+    lead: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/leads/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ agentId, lead }),
+    });
+  }
+
+  async deleteLead(id: string, agentId: string): Promise<any> {
+    const q = new URLSearchParams({ agentId });
+    return this.request(`/leads/${encodeURIComponent(id)}?${q.toString()}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async deleteAgentLeads(agentId: string, leadIds: string[]): Promise<any> {
+    const q = new URLSearchParams();
+    for (const id of leadIds) q.append('leadIds', id);
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/leads?${q.toString()}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  async deleteAllAgentLeads(agentId: string): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/leads/all`, {
+      method: 'DELETE',
+    });
+  }
+
+  async deleteLeadsByGroup(agentId: string, groupId: string): Promise<any> {
+    const q = new URLSearchParams({ groupId });
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/leads/group?${q.toString()}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  async importAgentLeadsBulk(
+    agentId: string,
+    leads: Array<Record<string, unknown>>
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/leads/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ leads }),
+    });
+  }
+
+  async magicImportLeads(
+    agentId: string,
+    body: {
+      rawText: string;
+      leadGroupId?: string;
+      additionalInstructions?: string;
+    }
+  ): Promise<any> {
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/magic-import-leads`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  }
+
+  async exportAgentLeads(
+    agentId: string,
+    opts?: { timeRange?: string }
+  ): Promise<any> {
+    const q = new URLSearchParams();
+    if (opts?.timeRange) q.set('timeRange', opts.timeRange);
+    const qs = q.toString();
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/leads/export${qs ? `?${qs}` : ''}`
+    );
+  }
+
+  async exportFilteredAgentLeads(
+    agentId: string,
+    body: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/leads/export-filtered`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  }
+
+  // ==================== Agent HTTP tools / variables ====================
+
+  async listAgentTools(agentId: string): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/tools`);
+  }
+
+  async getAgentTool(toolId: string): Promise<any> {
+    return this.request(`/tools/${encodeURIComponent(toolId)}`);
+  }
+
+  async createAgentTool(
+    agentId: string,
+    tool: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/tools`, {
+      method: 'POST',
+      body: JSON.stringify({ tool }),
+    });
+  }
+
+  async updateAgentTool(
+    toolId: string,
+    tool: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/tools/${encodeURIComponent(toolId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tool }),
+    });
+  }
+
+  async deleteAgentTool(toolId: string): Promise<any> {
+    return this.request(`/tools/${encodeURIComponent(toolId)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listAgentVariables(agentId: string): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/variables`);
+  }
+
+  async getAgentVariable(variableId: string): Promise<any> {
+    return this.request(`/variables/${encodeURIComponent(variableId)}`);
+  }
+
+  async createAgentVariable(
+    agentId: string,
+    variable: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/variables`, {
+      method: 'POST',
+      body: JSON.stringify({ variable }),
+    });
+  }
+
+  async updateAgentVariable(
+    variableId: string,
+    variable: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/variables/${encodeURIComponent(variableId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ variable }),
+    });
+  }
+
+  async deleteAgentVariable(variableId: string): Promise<any> {
+    return this.request(`/variables/${encodeURIComponent(variableId)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
+   * Dry-run an agent HTTP tool against its serverUrl with field overrides.
+   * Does not go through the agent LLM — fires the HTTP request directly.
+   */
+  async testAgentToolRequest(opts: {
+    toolId: string;
+    fieldOverrides?: Record<string, unknown>;
+    bodyOverride?: unknown;
+    timeoutMs?: number;
+  }): Promise<{
+    success: boolean;
+    tool: { id: string; name?: string; method?: string; serverUrl?: string };
+    request: {
+      method: string;
+      url: string;
+      headers: Record<string, string>;
+      body: unknown;
+    };
+    response: {
+      status: number;
+      ok: boolean;
+      headers: Record<string, string>;
+      body: unknown;
+      rawBody: string;
+    };
+  }> {
+    const toolRes = await this.getAgentTool(opts.toolId);
+    const tool =
+      (toolRes && typeof toolRes === 'object' && (toolRes as any).data) ||
+      toolRes;
+    if (!tool || typeof tool !== 'object') {
+      throw new ConvocoreApiRequestError({
+        message: 'Tool not found or unexpected response shape',
+        endpoint: `/tools/${opts.toolId}`,
+        method: 'GET',
+      });
+    }
+
+    const method = String((tool as any).method || 'POST').toUpperCase();
+    const serverUrl = String((tool as any).serverUrl || '').trim();
+    if (!serverUrl) {
+      throw new ConvocoreApiRequestError({
+        message: 'Tool has no serverUrl — cannot run HTTP test request',
+        endpoint: `/tools/${opts.toolId}`,
+        method: 'GET',
+      });
+    }
+
+    const fields: any[] = Array.isArray((tool as any).fields)
+      ? (tool as any).fields
+      : [];
+    const overrides = opts.fieldOverrides || {};
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    const secret = (tool as any).serverUrlSecret;
+    if (typeof secret === 'string' && secret.trim()) {
+      headers['Authorization'] = `Bearer ${secret.trim()}`;
+    }
+
+    const query: Record<string, string> = {};
+    const bodyObj: Record<string, unknown> = {};
+
+    for (const field of fields) {
+      if (!field || typeof field !== 'object') continue;
+      const key = String(field.key || field.id || '').trim();
+      if (!key) continue;
+      const value =
+        key in overrides
+          ? overrides[key]
+          : field.value !== undefined
+            ? field.value
+            : field.defaultValue;
+      if (value === undefined || value === null) continue;
+      const loc = String(field.in || 'body').toLowerCase();
+      if (loc === 'header') {
+        headers[key] = String(value);
+      } else if (loc === 'query') {
+        query[key] = String(value);
+      } else {
+        bodyObj[key] = value;
+      }
+    }
+
+    for (const [k, v] of Object.entries(overrides)) {
+      if (!(k in bodyObj) && !(k in query) && !(k in headers)) {
+        bodyObj[k] = v;
+      }
+    }
+
+    const url = new URL(serverUrl);
+    for (const [k, v] of Object.entries(query)) {
+      url.searchParams.set(k, v);
+    }
+
+    const bodyPayload =
+      opts.bodyOverride !== undefined
+        ? opts.bodyOverride
+        : Object.keys(bodyObj).length > 0
+          ? bodyObj
+          : undefined;
+
+    const controller = new AbortController();
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method,
+        headers,
+        body:
+          method === 'GET' || method === 'HEAD'
+            ? undefined
+            : bodyPayload !== undefined
+              ? JSON.stringify(bodyPayload)
+              : undefined,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const rawBody = await response.text();
+    let parsed: unknown = rawBody;
+    if (rawBody.trim()) {
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        parsed = rawBody;
+      }
+    }
+
+    const respHeaders: Record<string, string> = {};
+    response.headers.forEach((v, k) => {
+      respHeaders[k] = v;
+    });
+
+    return {
+      success: response.ok,
+      tool: {
+        id: String((tool as any).id || opts.toolId),
+        name: (tool as any).name,
+        method,
+        serverUrl,
+      },
+      request: {
+        method,
+        url: url.toString(),
+        headers: Object.fromEntries(
+          Object.entries(headers).map(([k, v]) =>
+            k.toLowerCase() === 'authorization' ? [k, '[REDACTED]'] : [k, v]
+          )
+        ),
+        body: bodyPayload ?? null,
+      },
+      response: {
+        status: response.status,
+        ok: response.ok,
+        headers: respHeaders,
+        body: parsed,
+        rawBody: rawBody.slice(0, 50_000),
+      },
+    };
+  }
+
+  async runAgentAutoTest(body: {
+    agentId: string;
+    config?: {
+      testMode?:
+        | 'full'
+        | 'kb-only'
+        | 'tools-only'
+        | 'prompt-only'
+        | 'with-tools'
+        | 'with-kb';
+      maxTurns?: number;
+      naturalEnd?: boolean;
+      testScenario?: string;
+      enabledToolIds?: string[];
+      enableKB?: boolean;
+    };
+  }): Promise<any> {
+    return this.request('/auto-test/run', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // ==================== Clone / channel send ====================
+
+  async cloneAgent(
+    agentId: string,
+    body?: {
+      overrides?: Record<string, unknown>;
+      carryOver?: {
+        kb?: boolean;
+        voiceConfig?: boolean;
+        uiEngineConfig?: boolean;
+      };
+    }
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/clone`, {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    });
+  }
+
+  async sendChannelMessage(
+    agentId: string,
+    convoId: string,
+    body: {
+      message?: string;
+      messages?: Array<Record<string, unknown>>;
+      sourceLabel?: string;
+      options?: Record<string, unknown>;
+    }
+  ): Promise<any> {
+    return this.request(
+      `/agents/${encodeURIComponent(agentId)}/convos/${encodeURIComponent(convoId)}/send`,
+      { method: 'POST', body: JSON.stringify(body) }
+    );
+  }
+
+  // ==================== KB extras ====================
+
+  async searchKBDocs(
+    agentId: string,
+    body: Record<string, unknown>
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/kb/search`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async bulkDeleteKBDocs(agentId: string, docIds: string[]): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/kb/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ docIds }),
+    });
+  }
+
+  async bulkCreateKBDocs(
+    agentId: string,
+    docs: Array<Record<string, unknown>>
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/kb/docs/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ docs }),
+    });
+  }
+
+  async createKBImages(
+    agentId: string,
+    body: {
+      images: Array<{
+        sourceUrl?: string;
+        data?: string;
+        mimeType?: string;
+      }>;
+      autoCaption?: boolean;
+      tags?: string[];
+      targetDocName: string;
+    }
+  ): Promise<any> {
+    return this.request(`/agents/${encodeURIComponent(agentId)}/kb/images`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getKBQuota(workspaceId?: string): Promise<any> {
+    const q = new URLSearchParams();
+    if (workspaceId) q.set('workspaceId', workspaceId);
+    const qs = q.toString();
+    return this.request(`/workspace/kb-docs/quota${qs ? `?${qs}` : ''}`);
+  }
 }
 
