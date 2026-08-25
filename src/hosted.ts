@@ -37,6 +37,7 @@ import {
   formatMcpDisplayName,
   sanitizeWorkspaceName,
 } from './mcp-display-name.js';
+import { PACKAGE_VERSION } from './package-meta.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -50,7 +51,6 @@ const SESSION_IDLE_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : ONE_YEAR_MS;
 })();
 const STARTED_AT = Date.now();
-const PACKAGE_VERSION = '2.6.1';
 const INSTALL_LINKS_PATH = '/v1/install-links';
 
 function resolveRequestSecret(req: IncomingMessage): string | null {

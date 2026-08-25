@@ -67,6 +67,7 @@ import {
 } from './list-compact.js';
 import { buildDomainTools } from './tools/index.js';
 import type { ToolHandler } from './tools/helpers.js';
+import { PACKAGE_VERSION } from './package-meta.js';
 
 const execAsync = promisify(exec);
 
@@ -4776,7 +4777,7 @@ export function createMcpServer(options?: { name?: string; version?: string }): 
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
-    version: options?.version || '2.6.1',
+    version: options?.version || PACKAGE_VERSION,
   },
   {
     capabilities: {
