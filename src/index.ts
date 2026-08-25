@@ -1060,6 +1060,19 @@ const ScrapeUrlSchema = z
       .describe(
         'check (default): fast HTTP status ping (200/404/etc) for pages/images — no crawler. scrape: full Convocore page scrape (content/colours/favicon); use one URL.'
       ),
+    useProxy: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        'mode=scrape only. Default false (cheap, ~1 credit/page). true = residential proxy scrape (~60 credits/page) for sites that block normal scrapers. NEVER set true unless (1) a normal scrape already failed/blocked AND (2) the user explicitly confirmed they accept the higher Convocore workspace credit cost.'
+      ),
+    confirmExpensiveProxy: z
+      .boolean()
+      .optional()
+      .describe(
+        'REQUIRED true when useProxy=true. Means the user explicitly confirmed proxy use and the extra credit burn. Do not invent confirmation.'
+      ),
   })
   .superRefine((data, ctx) => {
     const list = [
@@ -1079,6 +1092,21 @@ const ScrapeUrlSchema = z
         code: z.ZodIssueCode.custom,
         path: ['urls'],
         message: 'mode=scrape supports exactly one URL. Use mode=check for multiple links.',
+      });
+    }
+    if (data.useProxy === true && (data.mode ?? 'check') !== 'scrape') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['useProxy'],
+        message: 'useProxy only applies with mode=scrape (not mode=check).',
+      });
+    }
+    if (data.useProxy === true && data.confirmExpensiveProxy !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmExpensiveProxy'],
+        message:
+          'Proxy scrape is expensive (~60 credits/page vs ~1 without proxy) and burns Convocore workspace credits. Ask the user to confirm, then retry with useProxy=true AND confirmExpensiveProxy=true. Do not set confirmExpensiveProxy yourself without user approval.',
       });
     }
   });
@@ -4079,7 +4107,8 @@ const coreTools: Tool[] = [
     description:
       'Validate and/or scrape HTTP(S) URLs. ' +
       'DEFAULT mode=check: fast ping of one or many links/images (up to 20) — returns status (200/301/404/etc), ok, content-type, final URL after redirects. Use this to verify widget images, logos, CDN assets, booking links, or any URL before putting it on an agent. ' +
-      'mode=scrape: full Convocore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. ' +
+      'mode=scrape: full Convocore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. Default useProxy=false (~1 credit). ' +
+      'CRITICAL — proxy: ONLY if a normal (useProxy=false) scrape fails/blocks AND the user explicitly confirms. Proxy is MUCH more expensive (~60 credits/page) and CONSUMES Convocore workspace credits. Requires useProxy=true + confirmExpensiveProxy=true. Never enable proxy proactively. ' +
       'Do NOT use scrape for KB ingest (use create_kb_from_urls). Workspace is resolved internally — never pass workspaceId.',
     inputSchema: {
       type: 'object',
@@ -4101,6 +4130,16 @@ const coreTools: Tool[] = [
           enum: ['check', 'scrape'],
           description:
             'check = HTTP status ping (default). scrape = full page scrape (one URL only).',
+        },
+        useProxy: {
+          type: 'boolean',
+          description:
+            'mode=scrape only. Default false. true = expensive proxy scrape (~60 credits/page). ONLY after normal scrape failed AND user confirmed the extra credit cost.',
+        },
+        confirmExpensiveProxy: {
+          type: 'boolean',
+          description:
+            'Must be true together with useProxy=true. Confirms the user approved burning extra Convocore workspace credits for proxy scraping.',
         },
       },
     },
@@ -5622,12 +5661,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const resolvedWorkspaceId = await resolveWorkspaceId();
-        const result = await getActiveClient().scrapeUrl(resolvedWorkspaceId, urlList[0]);
+        const useProxy = validated.useProxy === true;
+        const result = await getActiveClient().scrapeUrl(resolvedWorkspaceId, urlList[0], {
+          useProxy,
+        });
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ mode: 'scrape', ...result }, null, 2),
+              text: JSON.stringify(
+                {
+                  mode: 'scrape',
+                  useProxy,
+                  creditNote: useProxy
+                    ? 'Proxy scrape used — significantly more expensive (~60 credits/page vs ~1 without proxy). Credits are deducted from the Convocore workspace.'
+                    : 'Normal scrape (no proxy) — ~1 credit/page. If this fails because the site blocks scrapers, ask the user before retrying with useProxy=true + confirmExpensiveProxy=true.',
+                  ...result,
+                },
+                null,
+                2
+              ),
             },
           ],
         };

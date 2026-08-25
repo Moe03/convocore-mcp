@@ -1178,13 +1178,19 @@ export class ConvocoreClient {
 
   /**
    * Scrape one URL and wait for the crawler service to store the page result.
+   * useProxy defaults false (cheap). Proxy scrapes cost far more credits — only when needed.
    */
-  async scrapeUrl(workspaceId: string, url: string): Promise<ApiResponse<ScrapeUrlResult>> {
+  async scrapeUrl(
+    workspaceId: string,
+    url: string,
+    options?: { useProxy?: boolean }
+  ): Promise<ApiResponse<ScrapeUrlResult>> {
+    const useProxy = options?.useProxy === true;
     const created = await this.createCrawlerJob(workspaceId, {
       urls: [url],
       crawl: false,
       deep: false,
-      useProxy: false,
+      useProxy,
     });
 
     const initialJob = created.data;

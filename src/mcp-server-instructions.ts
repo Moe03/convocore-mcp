@@ -161,8 +161,9 @@ When the user asks to create an agent for a website/URL (or similar), run this e
 ### Phase 1 — Discover & scrape (≥10 pages of understanding)
 1. Resolve the homepage URL. Call \`scrape_url\` (\`mode: "scrape"\`) on the homepage for title, colours, favicon, and page text.
 2. Discover more URLs: follow internal links from the scrape, and/or fetch \`/sitemap.xml\` / common paths (about, services, pricing, products, contact, blog, FAQ).
-3. **Scrape at least 10 distinct pages** with \`scrape_url\` (\`mode: "scrape"\`) before writing the prompt. Cover: home, about, offerings, pricing (if any), contact, and other high-value pages. Parallelize when safe.
-4. Extract brand: primary hex (\`primaryColor\`), logo/favicon (\`widgetImageUrl\`), tone, languages, CTAs, audience.
+3. **Scrape at least 10 distinct pages** with \`scrape_url\` (\`mode: "scrape"\`, **\`useProxy=false\`**) before writing the prompt. Cover: home, about, offerings, pricing (if any), contact, and other high-value pages. Parallelize when safe.
+4. If a page is blocked without proxy: **stop and ask the user** whether to retry with proxy (much more expensive — ~60 credits/page vs ~1; burns workspace credits). Only after they confirm, retry with \`useProxy: true\` + \`confirmExpensiveProxy: true\`. Never turn on proxy silently.
+5. Extract brand: primary hex (\`primaryColor\`), logo/favicon (\`widgetImageUrl\`), tone, languages, CTAs, audience.
 
 ### Phase 2 — Write a comprehensive \`systemPrompt\`
 Draft a **long, detailed** main prompt (this becomes \`nodes[0].instructions\`) that includes:
@@ -341,6 +342,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **Surgical KB edits:** for large docs use \`patch_kb_doc\` (\`old_string\` / \`new_string\`, same semantics as Cursor StrReplace) instead of rewriting full \`content\` via \`update_kb_doc\`.
 - **Validate links/images** (status 200/404, broken CDN, logo URLs): \`scrape_url\` with \`mode: "check"\` + \`urls: [...]\` (default mode). Fast ping — not a full scrape.
 - Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
+- **Proxy scrapes (expensive):** default is **no proxy** (\`useProxy=false\`, ~1 credit/page). If a normal scrape fails/blocks, **ask the user first** — proxy is ~**60 credits/page** and **consumes Convocore workspace credits**. Only then call with \`useProxy: true\` **and** \`confirmExpensiveProxy: true\`. Never enable proxy by default or without explicit user confirmation.
 - **HTTP tools / variables:** CRUD via \`list_agent_tools\` / \`create_agent_tool\` / … and \`list_agent_variables\` / …. Test: \`test_agent_tool\` (WS toolTest), \`test_agent_tool_request\` (direct HTTP dry-run), \`run_agent_auto_test\` (suite). Trial vars with \`interact_with_agent\` + \`variablesOverrides\`.
 
 ---
@@ -356,6 +358,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 ## Quick decision tree
 
 - **"Create an agent for this website / URL"** → full pipeline: scrape ≥10 pages → detailed \`systemPrompt\` → \`create_agent_from_template\` → KB ingest (many URLs/sitemap) → \`interact_with_agent\` (\`isTest: true\`) → give \`prototypeUrl\`.
+- **"Scrape blocked / need proxy"** → ask user first (proxy ~60 credits/page vs ~1; burns workspace credits). Only after yes: \`scrape_url\` \`mode=scrape\` + \`useProxy=true\` + \`confirmExpensiveProxy=true\`.
 - **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
 - **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` compact → then embed tool) → paste \`html\` in reply.
 - **"List agents / convos / KB / leads / orgs / clients"** → matching list tool with **\`mode=compact\`** (default). Escalate to \`full\` or \`get_*\` only when needed.
