@@ -140,6 +140,7 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 4. Prefer \`create_agent_from_template\` for new chat+voice agents (not raw \`create_agent\` unless advanced control is needed).
 5. \`ownerID\` / workspace ID is read-only — never try to PATCH it.
 6. \`search_agents\` may 404 on some workspaces — use \`list_agents\` or \`get_agent\` instead.
+7. \`list_agents\` defaults to **\`mode=compact\`** (id/title/short fields only, limit 25). Do **not** use \`mode=full\` unless you need every nested field — prefer \`get_agent\` for one agent.
 
 ## Interact / UI Engine agents
 

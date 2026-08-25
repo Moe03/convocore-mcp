@@ -55,6 +55,7 @@ import {
   type WidgetEmbedMode,
 } from './mcp-server-instructions.js';
 import { checkUrls } from './url-check.js';
+import { compactAgentsListResult } from './agent-list.js';
 import { buildDomainTools } from './tools/index.js';
 import type { ToolHandler } from './tools/helpers.js';
 
@@ -524,13 +525,22 @@ const DeleteAgentSchema = z.object({
 });
 
 const ListAgentsSchema = z.object({
+  mode: z
+    .enum(['compact', 'full'])
+    .optional()
+    .default('compact')
+    .describe(
+      'compact (default): only id/title/description/theme/flags/timestamps — token-cheap. full: raw API agent documents (heavy; use with a small limit or get_agent).'
+    ),
   limit: z
     .number()
     .int()
     .positive()
     .max(500)
     .optional()
-    .describe('When the API supports it, fetch at most this many agents. Omit for full list (can be very large).'),
+    .describe(
+      'Max agents to fetch when the API supports it. Compact mode defaults to 25 if omitted. Full mode: always set a small limit — omit only if you intentionally need the entire catalog.'
+    ),
 });
 
 const SearchAgentsSchema = z.object({
@@ -3140,14 +3150,20 @@ const coreTools: Tool[] = [
   {
     name: 'list_agents',
     description:
-      'List accessible agents. Passing `limit` requests a capped page when the API supports it — strongly recommended vs downloading the entire workspace catalog. Prefer search_agents for filtered lookup. Resolve workspace/org ID once (ownerID / CONVOCORE_WORKSPACE_ID) for other tools.',
+      'List accessible agents. Default mode="compact" returns only short fields (id, title, description, theme, flags, timestamps) so responses stay token-cheap — use this to find recent agents. mode="full" returns complete agent documents (nodes/prompts/voice/etc.) and is heavy; prefer get_agent for one agent, or search_agents for filtered lookup. Compact defaults limit=25 when omitted.',
     inputSchema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description:
+            'compact (default): short summary fields only. full: entire agent objects from the API (very large).',
+        },
         limit: {
           type: 'number',
           description:
-            'When supported, return at most this many agents (recommended: small). Omit only if you intentionally need the full list.',
+            'Max agents when supported. Compact defaults to 25. Full mode: always pass a small limit.',
         },
       },
       required: [],
@@ -4998,15 +5014,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_agents': {
-        const validated = ListAgentsSchema.parse(args);
+        const validated = ListAgentsSchema.parse(args ?? {});
+        const mode = validated.mode ?? 'compact';
+        const limit =
+          validated.limit != null
+            ? validated.limit
+            : mode === 'compact'
+              ? 25
+              : undefined;
         const result = await getActiveClient().listAgents(
-          validated.limit != null ? { limit: validated.limit } : undefined
+          limit != null ? { limit } : undefined
         );
+        const payload =
+          mode === 'full' ? result : compactAgentsListResult(result);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
