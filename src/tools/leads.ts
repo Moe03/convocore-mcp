@@ -1,12 +1,14 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { applyListMode, compactLeadsListResult } from '../list-compact.js';
 import { getActiveClient } from '../request-context.js';
-import { type ToolModule, wrapHandler } from './helpers.js';
+import { type ToolModule, wrapHandler, ListModeField, ListModeSchemaDescribe } from './helpers.js';
 
 const LeadsReadSchema = z
   .object({
     action: z.enum(['list', 'get', 'export', 'export_filtered']),
     agentId: z.string(),
+    mode: ListModeField,
     leadId: z.string().optional(),
     page: z.number().int().positive().optional(),
     limit: z.number().int().positive().max(500).optional(),
@@ -122,7 +124,9 @@ const tools: Tool[] = [
   {
     name: 'leads_read',
     description:
-      'Read CRM leads for an agent. Actions: list, get, export, export_filtered. Requires agentId. Does not create/update — use leads_write. Not for client accounts (clients_read).',
+      'Read CRM leads for an agent. Actions: list, get, export, export_filtered. ' +
+      'For action=list, default mode=compact (id/name/email/phone/ts — no metaData blobs). Use mode=full only when you need complete lead objects; prefer action=get for one lead. ' +
+      'Does not create/update — use leads_write. Not for client accounts (clients_read).',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -137,6 +141,11 @@ const tools: Tool[] = [
           enum: ['list', 'get', 'export', 'export_filtered'],
         },
         agentId: { type: 'string' },
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         leadId: { type: 'string' },
         page: { type: 'number' },
         limit: { type: 'number' },
@@ -215,23 +224,24 @@ export const leadsModule: ToolModule = {
                 v.leadFilters ||
                 v.useAgentLeadsEndpoint === true
             );
-          if (useAgent || v.useAgentLeadsEndpoint === true) {
-            return client.listAgentLeads(v.agentId, {
-              page: v.page,
-              limit: v.limit,
-              groupName: v.groupName,
-              searchTerm: v.searchTerm,
-              searchField: v.searchField,
-              propertyFilter: v.propertyFilter,
-              leadFilters: v.leadFilters,
-            });
-          }
-          return client.listLeads({
-            agentId: v.agentId,
-            page: v.page,
-            limit: v.limit,
-            cursor: v.cursor,
-          });
+          const raw =
+            useAgent || v.useAgentLeadsEndpoint === true
+              ? await client.listAgentLeads(v.agentId, {
+                  page: v.page,
+                  limit: v.limit,
+                  groupName: v.groupName,
+                  searchTerm: v.searchTerm,
+                  searchField: v.searchField,
+                  propertyFilter: v.propertyFilter,
+                  leadFilters: v.leadFilters,
+                })
+              : await client.listLeads({
+                  agentId: v.agentId,
+                  page: v.page,
+                  limit: v.limit,
+                  cursor: v.cursor,
+                });
+          return applyListMode(v.mode, raw, compactLeadsListResult);
         }
         case 'get':
           return client.getLead(v.leadId!, v.agentId);

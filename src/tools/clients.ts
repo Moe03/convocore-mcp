@@ -1,7 +1,14 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { applyListMode, compactClientsListResult } from '../list-compact.js';
 import { getActiveClient } from '../request-context.js';
-import { type ToolModule, wrapHandler, PageFields } from './helpers.js';
+import {
+  type ToolModule,
+  wrapHandler,
+  PageFields,
+  ListModeField,
+  ListModeSchemaDescribe,
+} from './helpers.js';
 
 const ClientsReadSchema = z
   .object({
@@ -9,6 +16,7 @@ const ClientsReadSchema = z
     clientId: z.string().optional(),
     orgId: z.string().optional(),
     email: z.string().optional(),
+    mode: ListModeField,
     ...PageFields,
   })
   .superRefine((v, ctx) => {
@@ -55,7 +63,9 @@ const tools: Tool[] = [
   {
     name: 'clients_read',
     description:
-      'Read Convocore client accounts (end-user workspaces under an agency/org). Actions: list, get, check_email. Not for organizations (use orgs_read) or CRM leads (use leads_read).',
+      'Read Convocore client accounts (end-user workspaces under an agency/org). Actions: list, get, check_email. ' +
+      'For action=list, default mode=compact (id/name/email/orgId). Use mode=full only when you need complete client objects; prefer action=get for one client. ' +
+      'Not for organizations (use orgs_read) or CRM leads (use leads_read).',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -69,6 +79,11 @@ const tools: Tool[] = [
         clientId: { type: 'string' },
         orgId: { type: 'string', description: 'Optional filter for list / check_email.' },
         email: { type: 'string', description: 'For check_email.' },
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         page: { type: 'number' },
         pageSize: { type: 'number' },
       },
@@ -111,11 +126,15 @@ export const clientsModule: ToolModule = {
       const client = getActiveClient();
       switch (v.action) {
         case 'list':
-          return client.listClients({
-            orgId: v.orgId,
-            page: v.page,
-            pageSize: v.pageSize,
-          });
+          return applyListMode(
+            v.mode,
+            await client.listClients({
+              orgId: v.orgId,
+              page: v.page,
+              pageSize: v.pageSize,
+            }),
+            compactClientsListResult
+          );
         case 'get':
           return client.getClient(v.clientId!);
         case 'check_email':

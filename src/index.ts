@@ -55,7 +55,16 @@ import {
   type WidgetEmbedMode,
 } from './mcp-server-instructions.js';
 import { checkUrls } from './url-check.js';
-import { compactAgentsListResult } from './agent-list.js';
+import {
+  applyListMode,
+  compactAgentsListResult,
+  compactClientsListResult,
+  compactConversationsListResult,
+  compactKbDocsListResult,
+  compactLeadsListResult,
+  compactOrgsListResult,
+  ListModeSchemaDescribe,
+} from './list-compact.js';
 import { buildDomainTools } from './tools/index.js';
 import type { ToolHandler } from './tools/helpers.js';
 
@@ -406,11 +415,23 @@ const CreateAgentSchema = z.object({
   light: z.boolean().optional().describe('Enable light mode (no chat history retention)'),
   enableVertex: z.boolean().optional().describe('Enable Vertex AI'),
   autoOpenWidget: z.boolean().optional().describe('Auto-open widget on load'),
-  enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
-  vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
+  systemPrompt: z
+    .string()
+    .optional()
+    .describe(
+      'Main agent behavior prompt. Always written to nodes[0].instructions (enableNodes is forced true). Prefer create_agent_from_template for new branded agents.'
+    ),
   voiceConfig: AgentVoiceConfigSchema.optional().describe('Agent voice configuration for transcription, speech generation, and call settings'),
-  nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions is the canonical main/system prompt'),
-  additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; not a primary API concept'),
+  nodes: z
+    .array(AgentNodeSchema)
+    .optional()
+    .describe(
+      'Optional nodes array. If omitted and systemPrompt is set, MCP creates [{ instructions: systemPrompt, name: "Main" }]. Main prompt MUST live in nodes[0].instructions.'
+    ),
+  additionalConfig: z
+    .record(z.any())
+    .optional()
+    .describe('Escape hatch for advanced fields. Do not use for the main prompt — use systemPrompt / nodes[0].instructions.'),
 }).merge(AgentUiEngineFieldsSchema);
 
 const HexColorSchema = z
@@ -513,25 +534,37 @@ const UpdateAgentSchema = z.object({
   light: z.boolean().optional().describe('Updated light mode setting'),
   enableVertex: z.boolean().optional().describe('Updated Vertex AI setting'),
   autoOpenWidget: z.boolean().optional().describe('Updated auto-open widget setting'),
-  enableNodes: z.boolean().optional().describe('If true, use node-based agent behavior and read the main prompt from nodes[0].instructions'),
-  vg_instructions: z.string().optional().describe('Legacy main prompt field for old agents where enableNodes is false or nodes are absent'),
+  systemPrompt: z
+    .string()
+    .optional()
+    .describe(
+      'Replace the main prompt (written to nodes[0].instructions; enableNodes forced true). Prefer patch_agent_prompt for surgical edits.'
+    ),
   voiceConfig: AgentVoiceConfigSchema.optional().describe('Updated agent voice configuration'),
-  nodes: z.array(AgentNodeSchema).optional().describe('Agent nodes; when enableNodes=true, nodes[0].instructions updates the canonical main/system prompt'),
-  additionalConfig: z.record(z.any()).optional().describe('Escape hatch for raw agent fields not modeled by this MCP yet; use explicit fields when available'),
+  nodes: z
+    .array(AgentNodeSchema)
+    .optional()
+    .describe(
+      'Full nodes array if replacing nodes. Main prompt MUST be nodes[0].instructions. Prefer systemPrompt or patch_agent_prompt for prompt-only changes.'
+    ),
+  additionalConfig: z
+    .record(z.any())
+    .optional()
+    .describe('Escape hatch for advanced fields. Do not put the main prompt here.'),
 }).merge(AgentUiEngineFieldsSchema);
 
 const DeleteAgentSchema = z.object({
   agentId: z.string().describe('The unique identifier of the agent to delete'),
 });
 
+const ListModeField = z
+  .enum(['compact', 'full'])
+  .optional()
+  .default('compact')
+  .describe(ListModeSchemaDescribe);
+
 const ListAgentsSchema = z.object({
-  mode: z
-    .enum(['compact', 'full'])
-    .optional()
-    .default('compact')
-    .describe(
-      'compact (default): only id/title/description/theme/flags/timestamps — token-cheap. full: raw API agent documents (heavy; use with a small limit or get_agent).'
-    ),
+  mode: ListModeField,
   limit: z
     .number()
     .int()
@@ -539,11 +572,12 @@ const ListAgentsSchema = z.object({
     .max(500)
     .optional()
     .describe(
-      'Max agents to fetch when the API supports it. Compact mode defaults to 25 if omitted. Full mode: always set a small limit — omit only if you intentionally need the entire catalog.'
+      'Max agents to fetch when the API supports it. Compact mode defaults to 25 if omitted. Full mode: always set a small limit.'
     ),
 });
 
 const SearchAgentsSchema = z.object({
+  mode: ListModeField,
   search: z.string().optional().describe('Search query to find agents'),
   page: z.number().optional().default(1).describe('Page number'),
   limit: z.number().optional().default(50).describe('Results per page'),
@@ -572,6 +606,7 @@ const AgentUsageSchema = z.object({
 // ==================== CONVERSATION SCHEMAS ====================
 
 const ListConversationsSchema = z.object({
+  mode: ListModeField,
   agentId: z.string().describe('The agent ID to list conversations for'),
   cursor: z
     .string()
@@ -915,6 +950,7 @@ const CreateKbFromUrlsSchema = z.object({
 });
 
 const ListKBDocsSchema = z.object({
+  mode: ListModeField,
   agentId: z.string().describe('The agent ID'),
   page: z.number().optional().default(1).describe('Page number'),
   pageSize: z.number().optional().default(20).describe('Results per page'),
@@ -1597,6 +1633,66 @@ function buildTemplateStartNode(systemPrompt: string) {
     llmConfig: { ...TEMPLATE_START_NODE_DEFAULTS.llmConfig },
     instructions: systemPrompt,
   };
+}
+
+/**
+ * Force enableNodes=true and keep the canonical prompt on nodes[0].instructions.
+ * Silently mirrors to vg_instructions / vg_systemPrompt for API compatibility —
+ * callers should not set those fields; schemas no longer expose them.
+ */
+function normalizeNodesEnabledAgentPayload(fields: Record<string, unknown>): Record<string, unknown> {
+  const {
+    systemPrompt: systemPromptRaw,
+    enableNodes: _ignoreEnableNodes,
+    vg_instructions: _ignoreVgInstructions,
+    vg_systemPrompt: _ignoreVgSystemPrompt,
+    nodes: nodesRaw,
+    ...rest
+  } = fields;
+
+  const systemPrompt =
+    typeof systemPromptRaw === 'string' && systemPromptRaw.trim().length > 0
+      ? systemPromptRaw.trim()
+      : undefined;
+
+  let nodes = Array.isArray(nodesRaw) ? [...nodesRaw] : undefined;
+  if (systemPrompt) {
+    if (!nodes || nodes.length === 0) {
+      nodes = [buildTemplateStartNode(systemPrompt)];
+    } else {
+      const first =
+        nodes[0] && typeof nodes[0] === 'object'
+          ? { ...(nodes[0] as Record<string, unknown>) }
+          : {};
+      first.instructions = systemPrompt;
+      nodes = [first, ...nodes.slice(1)];
+    }
+  }
+
+  if (nodes) {
+    nodes = normalizeTemplateAgentNodesForCreate(nodes);
+  }
+
+  const promptFromNodes =
+    nodes &&
+    nodes[0] &&
+    typeof nodes[0] === 'object' &&
+    typeof (nodes[0] as any).instructions === 'string'
+      ? String((nodes[0] as any).instructions)
+      : undefined;
+  const prompt = systemPrompt || promptFromNodes;
+
+  const out: Record<string, unknown> = {
+    ...rest,
+    enableNodes: true,
+  };
+  if (nodes) out.nodes = nodes;
+  // Silent mirrors for backends that still read these fields
+  if (prompt) {
+    out.vg_instructions = prompt;
+    out.vg_systemPrompt = prompt;
+  }
+  return out;
 }
 
 function normalizeTemplateAgentNodesForCreate(nodes: unknown): unknown[] {
@@ -2852,9 +2948,9 @@ const coreTools: Tool[] = [
   {
     name: 'create_agent',
     description:
-      'Create a new Convocore AI agent directly from supplied fields (legacy/raw mode). For new branded chat+voice agents, use scrape_url + create_agent_from_template with explicit prompts and voiceConfig. Use this tool only for manual/advanced direct payload control. ' +
-      'New agents MUST use chat model gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). Fallback: gemini-3.1-flash-lite. Do not pick gpt-4o / gpt-4o-mini / other legacy models. ' +
-      'UI Engine: set vg_enableUIEngine plus optional forms/invoice/calendar flags and vg_uiEngineChannelConfig to control which UI elements (cards, buttons, forms, invoice, …) the agent may emit.',
+      'Create a Convocore agent (advanced/raw). Prefer create_agent_from_template for website/branded agents. ' +
+      'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions. ' +
+      'Default chat model gpt-5.6-luna. UI Engine flags optional via vg_enableUIEngine*.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2886,15 +2982,10 @@ const coreTools: Tool[] = [
           type: 'boolean',
           description: 'Auto-open widget when agent loads',
         },
-        enableNodes: {
-          type: 'boolean',
-          description:
-            'Enable node-based agent behavior. If true, put the main prompt in nodes[0].instructions. If false/legacy, use vg_instructions.',
-        },
-        vg_instructions: {
+        systemPrompt: {
           type: 'string',
           description:
-            'Legacy main prompt field for old/non-node agents. For modern enableNodes=true agents, use nodes[0].instructions instead.',
+            'Main behavior prompt → written to nodes[0].instructions (enableNodes always true).',
         },
         ...AgentUiEngineInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
@@ -2902,12 +2993,12 @@ const coreTools: Tool[] = [
           type: 'array',
           items: AgentNodeInputSchema,
           description:
-            'Agent nodes array. For enableNodes=true agents, the FIRST node (nodes[0]) should contain the main prompt in its instructions field. Example: [{ "instructions": "Main agent prompt", "name": "Main Node" }].',
+            'Optional nodes. If omitted with systemPrompt, MCP creates the start node. Main prompt MUST be nodes[0].instructions.',
         },
         additionalConfig: {
           type: 'object',
           description:
-            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit fields including UI Engine flags (vg_enableUIEngine*, vg_uiEngineChannelConfig, …). Never set read-only fields like ownerID here.',
+            'Escape hatch for advanced fields. Do not put the main prompt here. Never set ownerID.',
         },
       },
       required: ['title'],
@@ -3004,7 +3095,7 @@ const coreTools: Tool[] = [
   {
     name: 'get_agent',
     description:
-      'Retrieve details of a specific Convocore agent. Prompt rule: if enableNodes=true, read the main prompt from nodes[0].instructions. If enableNodes=false or nodes are absent (old agent), read legacy vg_instructions. ownerID is the workspaceId and is read-only. ' +
+      'Retrieve details of a specific Convocore agent. Main prompt is always nodes[0].instructions (enableNodes is true for agents created via this MCP). Legacy vg_instructions only if nodes are absent on a very old agent. ownerID is the workspaceId and is read-only. ' +
       'Response includes prototypeUrl / tryItUrl — share that public demo with the user (https://app.convocore.ai/{eu|na}/prototype/{agentId}). Never invent /agents/ links.',
     inputSchema: {
       type: 'object',
@@ -3020,10 +3111,9 @@ const coreTools: Tool[] = [
   {
     name: 'update_agent',
     description:
-      'Update an existing Convocore agent (full-field PATCH). CRITICAL: for large prompts prefer patch_agent_prompt (Cursor-style exact old_string→new_string) instead of rewriting the entire instructions string. ' +
-      'Prompt rule: if enableNodes=true, main prompt is nodes[0].instructions; if legacy, vg_instructions. ' +
-      'UI Engine elements: use vg_enableUIEngine (master) plus vg_enableUIEngineForms / vg_enableUIEngineInvoice / vg_enableUIEngineCalendarBooking and vg_uiEngineChannelConfig to control which UI the agent may show (choice buttons, cards, carousels, forms, invoice, calendar, etc.). Call get_ui_engine_spec for message payloads. ' +
-      'ownerID/workspaceId is read-only. Integrations are workspace/org/client-level, not agent-level.',
+      'Update an existing Convocore agent (PATCH). For large prompt edits prefer patch_agent_prompt. ' +
+      'Main prompt: use systemPrompt or nodes[0].instructions — enableNodes is forced true; do not use vg_instructions. ' +
+      'UI Engine: vg_enableUIEngine* + vg_uiEngineChannelConfig. ownerID is read-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3059,15 +3149,10 @@ const coreTools: Tool[] = [
           type: 'boolean',
           description: 'Updated auto-open widget setting',
         },
-        enableNodes: {
-          type: 'boolean',
-          description:
-            'Enable/disable node-based behavior. If true, the main prompt comes from nodes[0].instructions. If false/legacy, vg_instructions is used.',
-        },
-        vg_instructions: {
+        systemPrompt: {
           type: 'string',
           description:
-            'Legacy main prompt for old/non-node agents. Only use as the main prompt when enableNodes=false or nodes are absent.',
+            'Replace main prompt → nodes[0].instructions (enableNodes forced true). Prefer patch_agent_prompt for surgical edits.',
         },
         ...AgentUiEngineInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
@@ -3075,12 +3160,12 @@ const coreTools: Tool[] = [
           type: 'array',
           items: AgentNodeInputSchema,
           description:
-            'IMPORTANT: Agent nodes array. For enableNodes=true agents, update nodes[0].instructions to change the canonical main prompt. Include the full intended nodes array if the API replaces arrays. Example: [{ "instructions": "Your new prompt here", "name": "Main Node" }].',
+            'Full nodes array if replacing nodes. Main prompt MUST be nodes[0].instructions.',
         },
         additionalConfig: {
           type: 'object',
           description:
-            'Escape hatch for raw agent fields not modeled by this MCP yet. Prefer explicit UI Engine fields (vg_enableUIEngine*, vg_uiEngineChannelConfig, vg_uiEngine*Config) over stuffing them here. Never set read-only fields like ownerID/workspaceId here.',
+            'Escape hatch for advanced fields. Do not put the main prompt here. Never set ownerID.',
         },
       },
       required: ['agentId'],
@@ -3172,10 +3257,15 @@ const coreTools: Tool[] = [
   {
     name: 'search_agents',
     description:
-      'Search/filter Convocore agents. Workspace is resolved internally from MCP configuration/workspace secret context; callers should never pass workspaceId. Use list_agents only when the user explicitly wants recent/latest agents without search filters.',
+      'Search/filter Convocore agents. Default mode=compact (short fields only). Use mode=full only when you need complete agent docs. Prefer list_agents (compact) for recent agents without a query.',
     inputSchema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         search: {
           type: 'string',
           description: 'Search query to find agents',
@@ -3271,14 +3361,17 @@ const coreTools: Tool[] = [
   {
     name: 'list_conversations',
     description:
-      'List conversations for an agent (newest first) from the Postgres conversation mirror. ' +
-      'Pagination is cursor-based: response includes hasMore + nextCursor. ' +
-      'To fetch the next page, call again with cursor=<previous nextCursor>. ' +
-      'Do NOT bump page alone — page>1 without cursor is rejected. Max limit=20. ' +
-      'List rows may omit Firestore-only fields such as title/lastMessage.',
+      'List conversations for an agent (newest first). Default mode=compact (id/ts/summary/user/origin — no messages). ' +
+      'mode=full returns raw list rows. For message bodies use get_conversation or get_conversations_bulk. ' +
+      'Cursor pagination: hasMore + nextCursor; do NOT bump page alone. Max limit=20.',
     inputSchema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         agentId: {
           type: 'string',
           description: 'The agent ID to list conversations for',
@@ -3814,10 +3907,17 @@ const coreTools: Tool[] = [
   },
   {
     name: 'list_kb_docs',
-    description: 'List all knowledge base documents for an agent',
+    description:
+      'List knowledge base documents for an agent. Default mode=compact (id/name/status/urls — NO content bodies). ' +
+      'Use mode=full only if you need every list field; prefer get_kb_doc for one document body.',
     inputSchema: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         agentId: {
           type: 'string',
           description: 'The agent ID',
@@ -4860,10 +4960,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const validated = CreateAgentSchema.parse(args);
         const { additionalConfig, ...agentFields } = validated;
         const payload = {
-          agent: {
+          agent: normalizeNodesEnabledAgentPayload({
             ...agentFields,
             ...(additionalConfig || {}),
-          },
+          }) as any,
         };
 
         const result = await getActiveClient().createAgent(payload);
@@ -4879,7 +4979,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   agentId,
                   ...links,
                   note:
-                    'Send the user prototypeUrl to try the agent. Never use /agents/{id}.',
+                    'Send the user prototypeUrl to try the agent. Never use /agents/{id}. Main prompt is nodes[0].instructions (enableNodes=true).',
                 },
                 null,
                 2
@@ -4961,12 +5061,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'update_agent': {
         const validated = UpdateAgentSchema.parse(args);
         const { agentId, additionalConfig, ...updateFields } = validated;
-        
+
         const payload = {
-          agent: {
+          agent: normalizeNodesEnabledAgentPayload({
             ...updateFields,
             ...(additionalConfig || {}),
-          },
+          }) as any,
         };
 
         const result = await getActiveClient().updateAgent(agentId, payload);
@@ -5025,8 +5125,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await getActiveClient().listAgents(
           limit != null ? { limit } : undefined
         );
-        const payload =
-          mode === 'full' ? result : compactAgentsListResult(result);
+        const payload = applyListMode(mode, result, compactAgentsListResult);
         return {
           content: [
             {
@@ -5038,7 +5137,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'search_agents': {
-        const validated = SearchAgentsSchema.parse(args);
+        const validated = SearchAgentsSchema.parse(args ?? {});
         const resolvedWorkspaceId = await resolveWorkspaceId();
         const result = await getActiveClient().searchAgents(
           resolvedWorkspaceId,
@@ -5048,11 +5147,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validated.sortBy,
           validated.starredOnly
         );
+        const payload = applyListMode(
+          validated.mode,
+          result,
+          compactAgentsListResult
+        );
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
@@ -5123,18 +5227,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ==================== CONVERSATION HANDLERS ====================
 
       case 'list_conversations': {
-        const validated = ListConversationsSchema.parse(args);
+        const validated = ListConversationsSchema.parse(args ?? {});
         const result = await getActiveClient().listConversations(
           validated.agentId,
           validated.page,
           validated.limit,
           validated.cursor
         );
+        const payload = applyListMode(
+          validated.mode,
+          result,
+          compactConversationsListResult
+        );
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };
@@ -5365,17 +5474,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_kb_docs': {
-        const validated = ListKBDocsSchema.parse(args);
+        const validated = ListKBDocsSchema.parse(args ?? {});
         const result = await getActiveClient().listKBDocs(
           validated.agentId,
           validated.page,
           validated.pageSize
         );
+        const payload = applyListMode(
+          validated.mode,
+          result,
+          compactKbDocsListResult
+        );
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(payload, null, 2),
             },
           ],
         };

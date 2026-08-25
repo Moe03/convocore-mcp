@@ -44,12 +44,13 @@ describe('compactAgentsListResult', () => {
     assert.ok(String(agent.description).length <= 160);
   });
 
-  it('compacts bare agent arrays', () => {
+  it('compacts bare agent arrays into { mode, data }', () => {
     const out = compactAgentsListResult([
       { ID: '1', title: 'A', nodes: [{ instructions: 'big' }] },
     ]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0].ID, '1');
-    assert.equal(out[0].nodes, undefined);
+    assert.equal(out.mode, 'compact');
+    assert.equal(out.data.length, 1);
+    assert.equal(out.data[0].ID, '1');
+    assert.equal(out.data[0].nodes, undefined);
   });
 });

@@ -132,15 +132,76 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 - **Do not** pick legacy models: \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other old defaults.
 - Prefer newer models (GPT-5.6 family, Gemini 3.x, Claude 4.5/4.6/4.7) over older ones.
 
+## CRITICAL — main prompt & agent schema (nodes only)
+
+- **Always node-based.** MCP forces \`enableNodes=true\` on create/update. Do **not** set \`enableNodes\`, \`vg_instructions\`, or \`vg_systemPrompt\` as caller inputs.
+- **Canonical main prompt** = \`nodes[0].instructions\`. Pass it as \`systemPrompt\` on \`create_agent\` / \`create_agent_from_template\` / \`update_agent\` (MCP writes the start node + silent API mirrors).
+- Prefer \`create_agent_from_template\` for website/branded agents. Use raw \`create_agent\` only for advanced control.
+- Large prompt edits: \`patch_agent_prompt\` (\`old_string\` → \`new_string\`) targeting \`nodes0\` / \`auto\` — not rewriting via \`vg_instructions\`.
+
+## CRITICAL — list tools: compact by default
+
+All listing tools default to **\`mode=compact\`** (short fields, token-cheap). You choose when to escalate:
+
+| Tool | Compact returns | Use \`mode=full\` when… | Prefer for one item |
+|------|-----------------|------------------------|---------------------|
+| \`list_agents\` / \`search_agents\` | id, title, description, theme, flags, timestamps | You truly need every nested field in the list | \`get_agent\` |
+| \`list_conversations\` | id, ts, summary, user, origin (no messages) | You need raw list rows beyond compact | \`get_conversation\` / \`get_conversations_bulk\` |
+| \`list_kb_docs\` | id, name, status, urls (no content bodies) | You need every list field | \`get_kb_doc\` |
+| \`leads_read\` action=list | id, name, email, phone, ts, source | You need full metaData on every row | \`leads_read\` action=get |
+| \`orgs_read\` list/search/list_* | short org/client/agent fields | Complete org/client payloads in bulk | \`orgs_read\` action=get |
+| \`clients_read\` action=list | id, name, email, orgId | Complete client objects in bulk | \`clients_read\` action=get |
+
+**Rules:** stay on compact unless the user needs bulk heavy fields. Never use \`mode=full\` “just in case”. \`list_agents\` compact defaults \`limit=25\`.
+
+## CRITICAL — "Create an agent for this website" (full pipeline)
+
+When the user asks to create an agent for a website/URL (or similar), run this end-to-end — do not skip steps:
+
+### Phase 1 — Discover & scrape (≥10 pages of understanding)
+1. Resolve the homepage URL. Call \`scrape_url\` (\`mode: "scrape"\`) on the homepage for title, colours, favicon, and page text.
+2. Discover more URLs: follow internal links from the scrape, and/or fetch \`/sitemap.xml\` / common paths (about, services, pricing, products, contact, blog, FAQ).
+3. **Scrape at least 10 distinct pages** with \`scrape_url\` (\`mode: "scrape"\`) before writing the prompt. Cover: home, about, offerings, pricing (if any), contact, and other high-value pages. Parallelize when safe.
+4. Extract brand: primary hex (\`primaryColor\`), logo/favicon (\`widgetImageUrl\`), tone, languages, CTAs, audience.
+
+### Phase 2 — Write a comprehensive \`systemPrompt\`
+Draft a **long, detailed** main prompt (this becomes \`nodes[0].instructions\`) that includes:
+- Who the business is, what they sell/do, who they serve, geography
+- Products/services with specifics from scraped pages (names, tiers, differentiators)
+- Tone, language rules, what to do / never do
+- How to handle leads, FAQs, objections, handoff / human escalation
+- Knowledge boundaries (use KB; don’t invent policies/prices not in context)
+- UI Engine guidance if cards/buttons/forms are appropriate
+
+This prompt must be rich enough that the agent “knows” the business from day one — not a 5-line stub.
+
+### Phase 3 — Create the agent
+1. Call \`create_agent_from_template\` with: \`title\`, **\`systemPrompt\`** (the full draft), \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\` (homepage), voice as needed. Model: \`gpt-5.6-luna\`.
+2. Return \`prototypeUrl\` to the user immediately.
+3. Do **not** pass \`enableNodes\` / \`vg_instructions\` — MCP handles nodes.
+
+### Phase 4 — Ingest knowledge (more pages → KB)
+1. Collect **as many relevant URLs as practical** (sitemap + discovered links; batches of ≤50).
+2. Prefer \`create_kb_from_urls\` (\`scrapeContent\` true) and/or \`create_kb_doc\` with \`sourceType=sitemap\` + \`maxPages\` high enough for coverage.
+3. You may also attach important scraped text as \`sourceType=doc\` when URLs aren’t enough — but URL/sitemap ingest is preferred so KB stays refreshable.
+4. Poll \`list_kb_docs\` (compact) until docs leave pending/processing.
+
+### Phase 5 — Test before declaring done
+1. \`interact_with_agent\` with \`isTest: true\` — at least 3–5 turns covering: greeting/identity, a product/service question, a pricing/FAQ-style question, and an out-of-scope / escalate case.
+2. If answers are thin or wrong: expand the prompt via \`patch_agent_prompt\` and/or add more KB URLs, then re-test.
+3. Only then tell the user it’s ready — include \`prototypeUrl\` and embed help if they asked to deploy.
+
+**Do not** stop after a single homepage scrape + short prompt. Depth of scrape → prompt → KB → test is mandatory for website agent requests.
+
 ## Before you change an agent
 
-1. Call \`get_agent\` with the agent ID when you are unsure of current config.
-2. **Main prompt location:** if \`enableNodes=true\`, edit \`nodes[0].instructions\`. If legacy/no nodes, use \`vg_instructions\`.
-3. **Large prompt edits:** prefer \`patch_agent_prompt\` (exact \`old_string\` → \`new_string\`, Cursor StrReplace style) over rewriting the whole prompt via \`update_agent\`.
-4. Prefer \`create_agent_from_template\` for new chat+voice agents (not raw \`create_agent\` unless advanced control is needed).
-5. \`ownerID\` / workspace ID is read-only — never try to PATCH it.
+1. Call \`get_agent\` when unsure of current config.
+2. **Main prompt:** always \`nodes[0].instructions\` (via \`systemPrompt\` / \`patch_agent_prompt\`). Legacy \`vg_instructions\` only if reading a very old agent with no nodes.
+3. **Large prompt edits:** prefer \`patch_agent_prompt\` over full rewrites.
+4. Prefer \`create_agent_from_template\` for new chat+voice agents.
+5. \`ownerID\` / workspace ID is read-only — never PATCH it.
 6. \`search_agents\` may 404 on some workspaces — use \`list_agents\` or \`get_agent\` instead.
-7. \`list_agents\` defaults to **\`mode=compact\`** (id/title/short fields only, limit 25). Do **not** use \`mode=full\` unless you need every nested field — prefer \`get_agent\` for one agent.
+7. Listing: keep **\`mode=compact\`** unless you explicitly need heavy payloads (see table above).
 
 ## Interact / UI Engine agents
 
@@ -263,8 +324,8 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Conversation audits (bulk)
 
-- \`list_conversations\` is **cursor-paginated** (max 20/page). For page 2+ pass \`cursor\` from \`nextCursor\` — never bump \`page\` alone.
-- List rows are thin (often no \`summary\` / \`capturedVariables\`). For audits: collect IDs → \`get_conversations_bulk\` (max 50 IDs/call) → analyze \`summary\` / vars.
+- \`list_conversations\` defaults to **\`mode=compact\`** (no message bodies). Cursor-paginated (max 20/page). For page 2+ pass \`cursor\` from \`nextCursor\` — never bump \`page\` alone.
+- For audits: collect IDs → \`get_conversations_bulk\` (max 50 IDs/call) → analyze \`summary\` / vars. Use \`mode=full\` on list only if you need raw list rows.
 - \`query_conversations\` is an MCP-side filter (list scan + bulk get), not SQL. Bound with \`maxScan\`. Prefer \`get_conversations_bulk\` when you already have IDs.
 - Usage across many agents: \`get_agent_usage_bulk\` (max 20). KB audits: \`get_kb_docs_bulk\` (max 30).
 
@@ -294,19 +355,21 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Quick decision tree
 
+- **"Create an agent for this website / URL"** → full pipeline: scrape ≥10 pages → detailed \`systemPrompt\` → \`create_agent_from_template\` → KB ingest (many URLs/sitemap) → \`interact_with_agent\` (\`isTest: true\`) → give \`prototypeUrl\`.
 - **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
-- **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` → then embed tool) → paste \`html\` in reply.
-- **"Analyze / score / audit conversations"** → \`list_conversations\` (cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
+- **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` compact → then embed tool) → paste \`html\` in reply.
+- **"List agents / convos / KB / leads / orgs / clients"** → matching list tool with **\`mode=compact\`** (default). Escalate to \`full\` or \`get_*\` only when needed.
+- **"Analyze / score / audit conversations"** → \`list_conversations\` (compact + cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
 - **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create.
-- **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\`. Mutate with \`*_write\`.
-- **"CRM leads"** → \`leads_read\` / \`leads_write\`.
+- **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\` (list actions: compact). Mutate with \`*_write\`.
+- **"CRM leads"** → \`leads_read\` / \`leads_write\` (list: compact).
 - **"Add / test an HTTP tool or variable"** → \`create_agent_tool\` / \`create_agent_variable\` → \`test_agent_tool_request\` or \`test_agent_tool\` / \`run_agent_auto_test\`.
 - **"Which MCP tool do I use?"** → \`search_mcp_tools\`.
 - **"Voice button in my React app"** → \`@tixae-labs/web-sdk\` + agentId + region.
 - **"Change widget colors / button look"** → CSS tools (\`get_widget_css_styling_guide\` → \`update_agent_custom_css\`).
 - **"Enable cards / buttons / forms / invoice on the agent"** → \`update_agent\` with \`vg_enableUIEngine\` + \`vg_enableUIEngineForms\` / \`vg_enableUIEngineInvoice\` / \`vg_enableUIEngineCalendarBooking\` + optional \`vg_uiEngineChannelConfig\`. Then \`get_ui_engine_spec\` for payloads.
-- **"Change what the agent says"** → for small/full rewrites \`update_agent\`; for large prompts \`patch_agent_prompt\` (\`old_string\`/\`new_string\`) → \`nodes[0].instructions\` or \`proactiveMessage\`.
+- **"Change what the agent says"** → \`systemPrompt\` / \`patch_agent_prompt\` → \`nodes[0].instructions\` (never \`vg_instructions\` as the primary write). \`proactiveMessage\` for greeting bubble copy.
 - **"Tweak one section of a big KB doc"** → \`get_kb_doc\` → \`patch_kb_doc\`.
 - **"Search KB by meaning"** → \`search_kb_docs\`. Quota → \`get_kb_quota\`.
 - **"Fix agent not answering in Arabic / wrong language"** → check \`lang\`, voice \`language\`, and main prompt — not the embed script alone.

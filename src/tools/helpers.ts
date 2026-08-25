@@ -94,3 +94,13 @@ export const PageFields = {
   page: z.number().int().positive().optional(),
   pageSize: z.number().int().positive().max(200).optional(),
 };
+
+/** Shared compact/full list mode (default compact). */
+export { ListModeSchemaDescribe } from '../list-compact.js';
+export const ListModeField = z
+  .enum(['compact', 'full'])
+  .optional()
+  .default('compact')
+  .describe(
+    'compact (default): short summary fields only — token-cheap. full: complete API objects (heavy). Prefer get_* for one item.'
+  );

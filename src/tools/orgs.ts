@@ -1,7 +1,19 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import {
+  applyListMode,
+  compactAgentsListResult,
+  compactClientsListResult,
+  compactOrgsListResult,
+} from '../list-compact.js';
 import { getActiveClient } from '../request-context.js';
-import { type ToolModule, wrapHandler, PageFields } from './helpers.js';
+import {
+  type ToolModule,
+  wrapHandler,
+  PageFields,
+  ListModeField,
+  ListModeSchemaDescribe,
+} from './helpers.js';
 
 const OrgsReadSchema = z
   .object({
@@ -17,6 +29,7 @@ const OrgsReadSchema = z
     orgId: z.string().optional(),
     agentId: z.string().optional(),
     search: z.string().optional(),
+    mode: ListModeField,
     ...PageFields,
   })
   .superRefine((v, ctx) => {
@@ -103,7 +116,9 @@ const tools: Tool[] = [
   {
     name: 'orgs_read',
     description:
-      'Read organizations and related membership. Actions: list, search, get, list_clients, list_agents, list_members_and_teams, list_agent_org_clients. Does NOT create/update/delete — use orgs_write. For end-user client accounts use clients_read.',
+      'Read organizations and related membership. Actions: list, search, get, list_clients, list_agents, list_members_and_teams, list_agent_org_clients. ' +
+      'List/search actions default mode=compact (short fields). Use mode=full only when you need complete objects; prefer action=get for one org. ' +
+      'Does NOT create/update/delete — use orgs_write. For end-user client accounts use clients_read.',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -131,6 +146,11 @@ const tools: Tool[] = [
           description: 'Required for list_agent_org_clients.',
         },
         search: { type: 'string', description: 'Search query for action=search.' },
+        mode: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description: ListModeSchemaDescribe,
+        },
         page: { type: 'number' },
         pageSize: { type: 'number' },
       },
@@ -179,29 +199,49 @@ export const orgsModule: ToolModule = {
       const client = getActiveClient();
       switch (v.action) {
         case 'list':
-          return client.listOrgs({ page: v.page, pageSize: v.pageSize });
+          return applyListMode(
+            v.mode,
+            await client.listOrgs({ page: v.page, pageSize: v.pageSize }),
+            compactOrgsListResult
+          );
         case 'search':
-          return client.searchOrgs({
-            search: v.search,
-            page: v.page,
-            pageSize: v.pageSize,
-          });
+          return applyListMode(
+            v.mode,
+            await client.searchOrgs({
+              search: v.search,
+              page: v.page,
+              pageSize: v.pageSize,
+            }),
+            compactOrgsListResult
+          );
         case 'get':
           return client.getOrg(v.orgId!);
         case 'list_clients':
-          return client.listOrgClients(v.orgId!, {
-            page: v.page,
-            pageSize: v.pageSize,
-          });
+          return applyListMode(
+            v.mode,
+            await client.listOrgClients(v.orgId!, {
+              page: v.page,
+              pageSize: v.pageSize,
+            }),
+            compactClientsListResult
+          );
         case 'list_agents':
-          return client.listOrgAgents(v.orgId!, {
-            page: v.page,
-            pageSize: v.pageSize,
-          });
+          return applyListMode(
+            v.mode,
+            await client.listOrgAgents(v.orgId!, {
+              page: v.page,
+              pageSize: v.pageSize,
+            }),
+            compactAgentsListResult
+          );
         case 'list_members_and_teams':
           return client.listOrgMembersAndTeams(v.orgId!);
         case 'list_agent_org_clients':
-          return client.getAgentOrgClients(v.agentId!);
+          return applyListMode(
+            v.mode,
+            await client.getAgentOrgClients(v.agentId!),
+            compactClientsListResult
+          );
       }
     }),
     orgs_write: wrapHandler('orgs_write', async (args) => {
