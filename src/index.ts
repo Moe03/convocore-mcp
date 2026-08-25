@@ -4676,7 +4676,7 @@ export function createMcpServer(options?: { name?: string; version?: string }): 
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
-    version: options?.version || '2.6.0',
+    version: options?.version || '2.6.1',
   },
   {
     capabilities: {
