@@ -127,10 +127,19 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 
 ## CRITICAL — chat model for new agents
 
-- **Always create new agents on \`gpt-5.6-luna\`** (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`). Best quality and best value.
-- If Luna is blocked by plan/availability, use **\`gemini-3.1-flash-lite\`**.
+- **Default:** \`deepseek-ai/DeepSeek-V4-Flash\` (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`).
+- **Fallback during testing:** if Flash underperforms (broken UI-Engine JSON, ignores instructions, hallucinates), switch to **\`gpt-5.6-luna\`** via \`update_agent\` / \`modelId\` and **tell the user** which model the agent ended on.
 - **Do not** pick legacy models: \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other old defaults.
-- Prefer newer models (GPT-5.6 family, Gemini 3.x, Claude 4.5/4.6/4.7) over older ones.
+
+## CRITICAL — KB vs system prompt (node agents)
+
+**Root cause of "KB exists but agent says I don't know":** uploading docs under \`agentId\` is **not** enough by itself. Node agents need **\`nodes[0].kb.enabled: true\`** for automatic retrieval.
+
+MCP now sets this by default on \`create_agent_from_template\` / start nodes (\`enableAutoRag=true\` → \`nodes[0].kb\` with \`maxChunks\`, \`smartSearch\`, \`searchOnStart\`).
+
+**Still mandatory:** bake every critical scraped fact (pricing ranges, offerings, policies, contacts, room/item categories, confirmed image URLs) into **\`systemPrompt\` / \`nodes[0].instructions\`**. KB is a secondary layer. Do not ship an agent whose only copy of ground truth lives in KB docs.
+
+After create: verify with \`interact_with_agent\` fact questions that only the knowledge source answers — if the model deflects, patch more facts into the prompt and re-test.
 
 ## CRITICAL — main prompt & agent schema (nodes only)
 
@@ -165,34 +174,50 @@ When the user asks to create an agent for a website/URL (or similar), run this e
 4. If a page is blocked without proxy: **stop and ask the user** whether to retry with proxy (much more expensive — ~60 credits/page vs ~1; burns workspace credits). Only after they confirm, retry with \`useProxy: true\` + \`confirmExpensiveProxy: true\`. Never turn on proxy silently.
 5. Extract brand: primary hex (\`primaryColor\`), logo/favicon (\`widgetImageUrl\`), tone, languages, CTAs, audience.
 
-### Phase 2 — Write a comprehensive \`systemPrompt\`
-Draft a **long, detailed** main prompt (this becomes \`nodes[0].instructions\`) that includes:
+### Phase 2 — Write a comprehensive \`systemPrompt\` (PRIMARY knowledge)
+Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that includes:
 - Who the business is, what they sell/do, who they serve, geography
-- Products/services with specifics from scraped pages (names, tiers, differentiators)
+- Products/services/room or item **categories** with specifics from scraped pages (names, amenities, images that actually scraped)
+- Indicative pricing **only when scraped** — never invent per-SKU / per-room / per-date rates. Still try hard: scrape room/item pages normally, and if blocked ask the user to confirm **proxy** scrape. For hotel chains and dynamic-rate sites: bake whatever categories/amenities/images you did get; state "from $X" honesty + booking link when live rates aren't scrapable; prefer a live rates API tool when the brand exposes one
 - Tone, language rules, what to do / never do
-- How to handle leads, FAQs, objections, handoff / human escalation
-- Knowledge boundaries (use KB; don’t invent policies/prices not in context)
-- UI Engine guidance if cards/buttons/forms are appropriate
+- Lead-capture / form behavior (template also appends a standard lead-capture clause)
+- Anti-repetition (template appends a standard clause)
+- Knowledge boundaries + built-in **web-search** fallback clause
 
-This prompt must be rich enough that the agent “knows” the business from day one — not a 5-line stub.
+**Do not** rely on KB alone. Prompt = source of truth; KB = backup retrieval.
 
 ### Phase 3 — Create the agent
-1. Call \`create_agent_from_template\` with: \`title\`, **\`systemPrompt\`** (the full draft), \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\` (homepage), voice as needed. Model: \`gpt-5.6-luna\`.
-2. Return \`prototypeUrl\` to the user immediately.
-3. Do **not** pass \`enableNodes\` / \`vg_instructions\` — MCP handles nodes.
+1. Call \`create_agent_from_template\` with: \`title\`, **full \`systemPrompt\`**, \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\`, \`ownerNotifyEmails\` (workspace owner), voice as needed.
+   Defaults already enable: \`enableAutoRag\`, forms + form-notify, standard prompt clauses, DeepSeek-V4-Flash.
+2. Return \`prototypeUrl\` immediately. Note \`modelIdUsed\` and \`webSearchTool\` from the response.
+3. Do **not** pass \`enableNodes\` / \`vg_instructions\`.
 
-### Phase 4 — Ingest knowledge (more pages → KB)
-1. Collect **as many relevant URLs as practical** (sitemap + discovered links; batches of ≤50).
-2. Prefer \`create_kb_from_urls\` (\`scrapeContent\` true) and/or \`create_kb_doc\` with \`sourceType=sitemap\` + \`maxPages\` high enough for coverage.
-3. You may also attach important scraped text as \`sourceType=doc\` when URLs aren’t enough — but URL/sitemap ingest is preferred so KB stays refreshable.
-4. Poll \`list_kb_docs\` (compact) until docs leave pending/processing.
+### Phase 4 — Ingest knowledge (secondary layer)
+1. Collect many URLs → \`create_kb_from_urls\` / sitemap. Confirm \`nodes[0].kb.enabled\` via \`get_agent\` if unsure.
+2. Poll \`list_kb_docs\` (compact) until ready.
+3. Ask: does this business expose a **public rates/availability API**? If yes, wire \`create_agent_tool\` for live pricing instead of static scrape.
 
-### Phase 5 — Test before declaring done
-1. \`interact_with_agent\` with \`isTest: true\` — at least 3–5 turns covering: greeting/identity, a product/service question, a pricing/FAQ-style question, and an out-of-scope / escalate case.
-2. If answers are thin or wrong: expand the prompt via \`patch_agent_prompt\` and/or add more KB URLs, then re-test.
-3. Only then tell the user it’s ready — include \`prototypeUrl\` and embed help if they asked to deploy.
+### Phase 5 — Lead capture path (required for commercial sites)
+1. Template enables \`vg_enableUIEngineForms\` + \`vg_uiEngineFormNotifyConfig.enabled\`. Pass \`ownerNotifyEmails\`.
+2. Prompt must instruct the agent to render a lead form on buying/booking intent.
+3. Backup: when the user gives contact info, also \`leads_write\` action=create so CRM has the lead even if email notify fails.
+4. If email notify proves unreliable and the owner needs email: wire an HTTP email/webhook tool and test with \`test_agent_tool\`.
 
-**Do not** stop after a single homepage scrape + short prompt. Depth of scrape → prompt → KB → test is mandatory for website agent requests.
+### Phase 6 — Mandatory test protocol (8–12 turns) — do NOT skip
+Use \`interact_with_agent\` with \`isTest: true\` for a multi-turn conversation covering at least:
+1. Greeting (\`start\` / hello)
+2. Specific fact lookup (must surface prompt/KB data — fail if "I don't have that")
+3. Follow-up on same topic (no verbatim repetition)
+4. Comparison across two items/properties
+5. Out-of-scope question (graceful redirect, no hallucination)
+6. Buying-intent message (form / lead path triggers; CRM \`leads_write\` if contact given)
+7. Unknown-data question (built-in web-search should fire, else honest "don't know")
+8. Rephrased earlier question (anti-repetition)
+9. Image/card rendering with **only confirmed real URLs**
+Plus \`run_agent_auto_test\` (full / with-tools) when feasible.
+**Report a short test transcript summary to the user.** Agent is not done until this protocol passes. Single-turn smoke tests are insufficient.
+
+**Do not** stop after a single homepage scrape + short prompt. Depth of scrape → rich prompt bake-in → KB → lead path → deep test is mandatory.
 
 ## Before you change an agent
 
@@ -337,13 +362,16 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - Single/manual: \`create_kb_doc\` (\`url\` + \`urls[]\` + scrape, or \`doc\` for raw text you already have).
 - Bulk create (≤20 docs): \`bulk_create_kb_docs\`. Images: \`create_kb_image\`. Quota: \`get_kb_quota\`. Semantic search: \`search_kb_docs\`. Bulk delete: \`bulk_delete_kb_docs\`.
 - \`refreshRate\` is \`3d\` | \`7d\` | \`never\` (not hourly).
-- Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
-- Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\`.
-- **Surgical KB edits:** for large docs use \`patch_kb_doc\` (\`old_string\` / \`new_string\`, same semantics as Cursor StrReplace) instead of rewriting full \`content\` via \`update_kb_doc\`.
-- **Validate links/images** (status 200/404, broken CDN, logo URLs): \`scrape_url\` with \`mode: "check"\` + \`urls: [...]\` (default mode). Fast ping — not a full scrape.
 - Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
 - **Proxy scrapes (expensive):** default is **no proxy** (\`useProxy=false\`, ~1 credit/page). If a normal scrape fails/blocks, **ask the user first** — proxy is ~**60 credits/page** and **consumes Convocore workspace credits**. Only then call with \`useProxy: true\` **and** \`confirmExpensiveProxy: true\`. Never enable proxy by default or without explicit user confirmation.
-- **HTTP tools / variables:** CRUD via \`list_agent_tools\` / \`create_agent_tool\` / … and \`list_agent_variables\` / …. Test: \`test_agent_tool\` (WS toolTest), \`test_agent_tool_request\` (direct HTTP dry-run), \`run_agent_auto_test\` (suite). Trial vars with \`interact_with_agent\` + \`variablesOverrides\`.
+- Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
+- **Runtime RAG:** \`nodes[0].kb.enabled=true\` (default on template create). Without it, docs sit unused. Still bake critical facts into the system prompt.
+- Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\` — use the **8–12 turn** protocol for new website agents.
+- **Surgical KB edits:** for large docs use \`patch_kb_doc\` instead of full rewrites.
+- **Validate links/images:** \`scrape_url\` mode \`check\`. Branding extract: mode \`scrape\`.
+- **HTTP tools / variables:** CRUD via \`list_agent_tools\` / …. Test with \`test_agent_tool_request\` then \`test_agent_tool\` / \`run_agent_auto_test\`.
+- **Built-in web-search:** template sets \`nodes[0].toolsIds\` to include \`web-search\` (Convocore defaultSystemTools — not a custom HTTP/SerpAPI tool). Disable with \`attachWebSearchTool=false\` if needed.
+- **Buying-intent lead capture is not optional** for commercial-website agents: forms + notify + \`leads_write\` backup, verified in testing.
 
 ---
 
@@ -357,7 +385,8 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Quick decision tree
 
-- **"Create an agent for this website / URL"** → full pipeline: scrape ≥10 pages → detailed \`systemPrompt\` → \`create_agent_from_template\` → KB ingest (many URLs/sitemap) → \`interact_with_agent\` (\`isTest: true\`) → give \`prototypeUrl\`.
+- **"Create an agent for this website / URL"** → scrape ≥10 → bake facts into \`systemPrompt\` (not KB-only) → \`create_agent_from_template\` (auto RAG + forms notify) → KB ingest → lead path → **8–12 turn tests** → report transcript summary + \`prototypeUrl\`.
+- **"Agent ignores KB / says I don't know"** → confirm \`nodes[0].kb.enabled\`; still patch missing facts into \`systemPrompt\`; re-test fact lookup.
 - **"Scrape blocked / need proxy"** → ask user first (proxy ~60 credits/page vs ~1; burns workspace credits). Only after yes: \`scrape_url\` \`mode=scrape\` + \`useProxy=true\` + \`confirmExpensiveProxy=true\`.
 - **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
 - **"Add chatbot to my site" / "deploy to website" / "where is the code"** → \`get_website_embed_code\` (or \`list_agents\` compact → then embed tool) → paste \`html\` in reply.

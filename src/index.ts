@@ -38,7 +38,14 @@ import {
   RECOMMENDED_CHAT_MODEL_ID,
   TEMPLATE_START_NODE_DEFAULTS,
   normalizeTemplateStartNodeArray,
+  DEFAULT_NODE_KB_CONFIG,
 } from './template-start-node.js';
+import { appendStandardPromptSections } from './agent-prompt-standards.js';
+import {
+  DEFAULT_TEMPLATE_NODE_TOOL_IDS,
+  mergeNodeToolsIds,
+  WEB_SEARCH_BUILTIN_ID,
+} from './builtin-system-tools.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
@@ -494,6 +501,40 @@ const CreateAgentFromTemplateSchema = z
       .optional()
       .default(false)
       .describe('When true with sourceUrl/url, registers a URL KB doc after create (non-fatal on failure).'),
+    enableAutoRag: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        'When true (default), sets nodes[0].kb.enabled=true so the runtime auto-retrieves KB chunks into the start node. Still bake critical facts into systemPrompt — do not rely on KB alone.'
+      ),
+    appendStandardPromptClauses: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        'When true (default), appends anti-repetition, lead-capture, knowledge-source, web-search, and dynamic-pricing honesty clauses to systemPrompt.'
+      ),
+    attachWebSearchTool: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        'When true (default), enables Convocore built-in web-search on nodes[0].toolsIds (platform defaultSystemTools — no SerpAPI key needed).'
+      ),
+    ownerNotifyEmails: z
+      .array(z.string().email())
+      .max(10)
+      .optional()
+      .describe(
+        'Emails for vg_uiEngineFormNotifyConfig.extraEmails (lead form submissions). Prefer the workspace owner email. If omitted, form notify is still enabled for workspace defaults.'
+      ),
+    modelId: z
+      .string()
+      .optional()
+      .describe(
+        'Override chat model. Default deepseek-ai/DeepSeek-V4-Flash. Use gpt-5.6-luna if Flash underperforms during testing.'
+      ),
     requestId: z
       .string()
       .optional()
@@ -1656,11 +1697,22 @@ const DEFAULT_TEMPLATE_VOICE_CONFIG = {
   },
 } as const;
 
-function buildTemplateStartNode(systemPrompt: string) {
+function buildTemplateStartNode(
+  systemPrompt: string,
+  options?: { enableAutoRag?: boolean; attachWebSearch?: boolean }
+) {
+  const enableAutoRag = options?.enableAutoRag !== false;
+  const attachWebSearch = options?.attachWebSearch !== false;
   return {
     ...TEMPLATE_START_NODE_DEFAULTS,
     llmConfig: { ...TEMPLATE_START_NODE_DEFAULTS.llmConfig },
     instructions: systemPrompt,
+    kb: enableAutoRag
+      ? { ...DEFAULT_NODE_KB_CONFIG }
+      : { enabled: false, maxChunks: DEFAULT_NODE_KB_CONFIG.maxChunks },
+    toolsIds: attachWebSearch
+      ? mergeNodeToolsIds([], DEFAULT_TEMPLATE_NODE_TOOL_IDS)
+      : [],
   };
 }
 
@@ -1724,7 +1776,13 @@ function normalizeNodesEnabledAgentPayload(fields: Record<string, unknown>): Rec
   return out;
 }
 
-function normalizeTemplateAgentNodesForCreate(nodes: unknown): unknown[] {
+function normalizeTemplateAgentNodesForCreate(
+  nodes: unknown,
+  options?: { enableAutoRag?: boolean; forceModelId?: string; attachWebSearch?: boolean }
+): unknown[] {
+  const enableAutoRag = options?.enableAutoRag !== false;
+  const attachWebSearch = options?.attachWebSearch !== false;
+  const forceModelId = options?.forceModelId ?? DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
   const normalized = normalizeTemplateStartNodeArray(nodes);
   if (normalized.patchedFields.length > 0) {
     console.error(
@@ -1738,8 +1796,18 @@ function normalizeTemplateAgentNodesForCreate(nodes: unknown): unknown[] {
       node.llmConfig && typeof node.llmConfig === 'object'
         ? { ...(node.llmConfig as Record<string, unknown>) }
         : {};
-    llm.modelId = DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
+    llm.modelId = forceModelId;
     node.llmConfig = llm;
+    if (enableAutoRag) {
+      const kb =
+        node.kb && typeof node.kb === 'object'
+          ? { ...(node.kb as Record<string, unknown>) }
+          : {};
+      node.kb = { ...DEFAULT_NODE_KB_CONFIG, ...kb, enabled: true };
+    }
+    if (attachWebSearch) {
+      node.toolsIds = mergeNodeToolsIds(node.toolsIds, DEFAULT_TEMPLATE_NODE_TOOL_IDS);
+    }
     normalized.nodes[normalized.startNodeIndex] = node;
   }
   return normalized.nodes;
@@ -2624,11 +2692,23 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     sourceUrl: sourceUrlInput,
     url,
     createKbUrlDoc,
+    enableAutoRag,
+    appendStandardPromptClauses,
+    attachWebSearchTool,
+    ownerNotifyEmails,
+    modelId: modelIdOverride,
     additionalConfig,
   } = args;
 
   const sourceUrl = sourceUrlInput ?? url;
   const resolvedWorkspaceId = await resolveWorkspaceId();
+  const enableAutoRagResolved = enableAutoRag !== false;
+  const appendStandards = appendStandardPromptClauses !== false;
+  const attachSearch = attachWebSearchTool !== false;
+  const chatModelId =
+    typeof modelIdOverride === 'string' && modelIdOverride.trim().length > 0
+      ? modelIdOverride.trim()
+      : DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
   let stage = 'start';
 
   let scrapeMeta: {
@@ -2718,7 +2798,10 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
         scrapedText: scrapeMeta?.excerpt ?? '',
       })
     : buildPromptWithoutScrape(titleResolved);
-  const systemPromptResolved = (systemPrompt && systemPrompt.trim().length > 0 ? systemPrompt : generatedPrompt).trim();
+  const systemPromptBase = (systemPrompt && systemPrompt.trim().length > 0 ? systemPrompt : generatedPrompt).trim();
+  const systemPromptResolved = appendStandards
+    ? appendStandardPromptSections(systemPromptBase, { includeWebSearch: attachSearch })
+    : systemPromptBase;
   const imageResolved = widgetImageUrl || image || roundedImageURL || scrapedBranding.image;
   const primaryColorResolved = inputPrimaryColor || scrapedBranding.primaryColor || '#226D7A';
   const defaultLanguageResolved = resolveSingleLanguage(defaultLanguage ?? language ?? 'en');
@@ -2766,11 +2849,23 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     theme: themeType === 'dark' ? 'custom-blue-dark' : 'custom-blue-light',
     enableNodes: true,
     vg_enableUIEngine: true,
-    vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+    vg_enableUIEngineForms: true,
+    vg_uiEngineFormNotifyConfig: {
+      enabled: true,
+      ...(ownerNotifyEmails && ownerNotifyEmails.length > 0
+        ? { extraEmails: ownerNotifyEmails }
+        : {}),
+    },
+    vg_defaultModel: chatModelId,
     vg_systemPrompt: systemPromptResolved,
     vg_instructions: systemPromptResolved,
     voiceConfig: resolvedVoice,
-    nodes: [buildTemplateStartNode(systemPromptResolved)],
+    nodes: [
+      buildTemplateStartNode(systemPromptResolved, {
+        enableAutoRag: enableAutoRagResolved,
+        attachWebSearch: attachSearch,
+      }),
+    ],
     lang: defaultLanguageResolved,
     proactiveMessage: proactiveMessage ?? '👋 Hi, how can I help you today?',
     roundedImageURL: imageResolved,
@@ -2784,14 +2879,24 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   }
 
   const payload = { agent: mergeDeep(agentCore, sanitizedAdditional.rest as Record<string, unknown>) };
-  payload.agent.nodes = normalizeTemplateAgentNodesForCreate(payload.agent.nodes);
+  payload.agent.nodes = normalizeTemplateAgentNodesForCreate(payload.agent.nodes, {
+    enableAutoRag: enableAutoRagResolved,
+    forceModelId: chatModelId,
+    attachWebSearch: attachSearch,
+  });
   // Hard-enforce template invariants.
   payload.agent.agentPlatform = 'vg';
   payload.agent.enableNodes = true;
   payload.agent.vg_enableUIEngine = true;
-  payload.agent.vg_defaultModel = DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
+  payload.agent.vg_enableUIEngineForms = true;
+  payload.agent.vg_defaultModel = chatModelId;
   payload.agent.vg_systemPrompt = systemPromptResolved;
   payload.agent.vg_instructions = systemPromptResolved;
+  if (!payload.agent.vg_uiEngineFormNotifyConfig || typeof payload.agent.vg_uiEngineFormNotifyConfig !== 'object') {
+    payload.agent.vg_uiEngineFormNotifyConfig = { enabled: true };
+  } else {
+    (payload.agent.vg_uiEngineFormNotifyConfig as any).enabled = true;
+  }
 
   stage = 'create_agent';
   let result: any;
@@ -2848,10 +2953,22 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
             agentPlatform: 'vg',
             enableNodes: true,
             vg_enableUIEngine: true,
-            vg_defaultModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
+            vg_defaultModel: chatModelId,
             vg_systemPrompt: systemPromptResolved,
             vg_instructions: systemPromptResolved,
-            nodes: normalizeTemplateAgentNodesForCreate([buildTemplateStartNode(systemPromptResolved)]) as any,
+            nodes: normalizeTemplateAgentNodesForCreate(
+              [
+                buildTemplateStartNode(systemPromptResolved, {
+                  enableAutoRag: enableAutoRagResolved,
+                  attachWebSearch: attachSearch,
+                }),
+              ],
+              {
+                enableAutoRag: enableAutoRagResolved,
+                forceModelId: chatModelId,
+                attachWebSearch: attachSearch,
+              }
+            ) as any,
             voiceConfig: resolvedVoice as any,
             lang: defaultLanguageResolved,
             roundedImageURL: imageResolved,
@@ -2946,6 +3063,22 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     }
   }
 
+  let webSearchTool: {
+    attached: boolean;
+    toolId: string;
+    via: 'nodes.toolsIds';
+    note: string;
+  } | null = null;
+  if (attachSearch) {
+    webSearchTool = {
+      attached: true,
+      toolId: WEB_SEARCH_BUILTIN_ID,
+      via: 'nodes.toolsIds',
+      note:
+        'Enabled Convocore built-in web-search on nodes[0].toolsIds (platform defaultSystemTools). No SerpAPI/HTTP tool required.',
+    };
+  }
+
   const links = prototypeLinksForAgent(createdAgentId);
   return {
     success: !!createdAgentId,
@@ -2959,8 +3092,14 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
       ...links,
       recommendedModel: DEFAULT_MODEL_FOR_TEMPLATE_AGENTS,
       fallbackModel: FALLBACK_CHAT_MODEL_ID,
+      modelIdUsed: chatModelId,
+      enableAutoRag: enableAutoRagResolved,
       note:
-        'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}. New agents use gpt-5.6-luna.',
+        'Public demo URL is https://app.convocore.ai/{eu|na}/prototype/{agentId}. Never use /agents/{id}. ' +
+        `Model=${chatModelId} (fallback ${FALLBACK_CHAT_MODEL_ID}). ` +
+        'Bake ground-truth facts into systemPrompt; nodes[0].kb.enabled enables auto RAG as a secondary layer. ' +
+        'Built-in web-search is on nodes[0].toolsIds when attachWebSearchTool=true. ' +
+        'Run the mandatory 8–12 turn test protocol before declaring done.',
       agent: fullAgent ?? (result as any)?.data ?? result,
       createResponse: result,
       platformRepair,
@@ -2968,6 +3107,17 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
       themeType,
       scrape: scrapeMeta,
       kbImport: kbImportResult,
+      webSearchTool,
+      creationChecklist: {
+        bakeFactsIntoSystemPrompt: true,
+        enableAutoRag: enableAutoRagResolved,
+        formsNotifyEnabled: true,
+        ownerNotifyEmails: ownerNotifyEmails ?? [],
+        webSearchAttached: webSearchTool?.attached === true,
+        webSearchVia: webSearchTool?.via ?? null,
+        mandatoryMultiTurnTests: true,
+        minTestTurns: '8-12',
+      },
     },
   };
 }
@@ -2979,7 +3129,8 @@ const coreTools: Tool[] = [
     description:
       'Create a Convocore agent (advanced/raw). Prefer create_agent_from_template for website/branded agents. ' +
       'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions. ' +
-      'Default chat model gpt-5.6-luna. UI Engine flags optional via vg_enableUIEngine*.',
+      'Default chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna). UI Engine flags optional via vg_enableUIEngine*. ' +
+      'Sets nodes[0].kb.enabled for auto RAG — still bake critical facts into systemPrompt.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3036,7 +3187,8 @@ const coreTools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, chat model gpt-5.6-luna (fallback gemini-3.1-flash-lite), and vg_* overrides are blocked from additionalConfig. ' +
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, nodes[0].kb.enabled (auto RAG), nodes[0].toolsIds includes built-in web-search, chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna), standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
+      'CRITICAL: bake scraped ground-truth into systemPrompt — KB alone is not enough. Run 8–12 turn fact/lead/anti-rep tests before declaring done. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
       type: 'object',
@@ -6298,15 +6450,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               : PRICING.models;
             payload = {
               creditConversion: PRICING.meta.creditConversion,
-              recommendedNewAgentModel: 'gpt-5.6-luna',
-              fallbackNewAgentModel: 'gemini-3.1-flash-lite',
+              recommendedNewAgentModel: RECOMMENDED_CHAT_MODEL_ID,
+              fallbackNewAgentModel: FALLBACK_CHAT_MODEL_ID,
               models,
               filter: filter ?? null,
               count: models.length,
               notes: [
                 'Prices are USD per 1,000,000 tokens (input / output).',
                 'Each interaction also charges 1 base credit ($0.001) on top of token cost.',
-                'New agents should use gpt-5.6-luna (then gemini-3.1-flash-lite). Avoid gpt-4o / legacy defaults.',
+                'New agents should use deepseek-ai/DeepSeek-V4-Flash (then gpt-5.6-luna). Avoid gpt-4o / legacy defaults.',
                 'Higher plans include every lower model tier.',
               ],
             };

@@ -1,7 +1,9 @@
-/** Default chat model for every new agent. Best quality/value — prefer this. */
-export const RECOMMENDED_CHAT_MODEL_ID = 'gpt-5.6-luna';
-/** Solid cheaper fallback if Luna is unavailable on the workspace plan. */
-export const FALLBACK_CHAT_MODEL_ID = 'gemini-3.1-flash-lite';
+import { DEFAULT_TEMPLATE_NODE_TOOL_IDS, mergeNodeToolsIds } from './builtin-system-tools.js';
+
+/** Default chat model for every new agent. */
+export const RECOMMENDED_CHAT_MODEL_ID = 'deepseek-ai/DeepSeek-V4-Flash';
+/** Fallback if DeepSeek V4 Flash underperforms or is unavailable — GPT-5.6 Luna. */
+export const FALLBACK_CHAT_MODEL_ID = 'gpt-5.6-luna';
 
 const LEGACY_CHAT_MODEL_IDS = new Set([
   'gpt-4o',
@@ -22,6 +24,15 @@ export function isLegacyChatModelId(modelId: string | undefined): boolean {
   return id.includes('gpt-4o') || id.includes('glm-4') || id.includes('glm-5');
 }
 
+/** OpenAPI nodes[].kb — enables automatic KB retrieval on the start node. */
+export const DEFAULT_NODE_KB_CONFIG = {
+  enabled: true,
+  maxChunks: 8,
+  maxQueries: 3,
+  smartSearch: true,
+  searchOnStart: true,
+} as const;
+
 export const TEMPLATE_START_NODE_DEFAULTS = {
   id: '__start__',
   type: 'start',
@@ -33,6 +44,9 @@ export const TEMPLATE_START_NODE_DEFAULTS = {
     temperature: 0.5,
     maxTokens: 2024,
   },
+  kb: { ...DEFAULT_NODE_KB_CONFIG },
+  /** Built-in Convocore system tools (e.g. web-search) — not HTTP create_agent_tool. */
+  toolsIds: [...DEFAULT_TEMPLATE_NODE_TOOL_IDS] as string[],
 } as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -69,7 +83,15 @@ export function normalizeTemplateStartNodeArray(
 
   if (startNodeIndex === -1) {
     return {
-      nodes: [{ ...TEMPLATE_START_NODE_DEFAULTS, llmConfig: { ...TEMPLATE_START_NODE_DEFAULTS.llmConfig } }, ...nodes],
+      nodes: [
+        {
+          ...TEMPLATE_START_NODE_DEFAULTS,
+          llmConfig: { ...TEMPLATE_START_NODE_DEFAULTS.llmConfig },
+          kb: { ...TEMPLATE_START_NODE_DEFAULTS.kb },
+          toolsIds: [...TEMPLATE_START_NODE_DEFAULTS.toolsIds],
+        },
+        ...nodes,
+      ],
       startNodeIndex: 0,
       createdStartNode: true,
       patchedFields: [
@@ -81,6 +103,9 @@ export function normalizeTemplateStartNodeArray(
         'llmConfig.modelId',
         'llmConfig.temperature',
         'llmConfig.maxTokens',
+        'kb.enabled',
+        'kb.maxChunks',
+        'toolsIds',
       ],
     };
   }
@@ -134,6 +159,40 @@ export function normalizeTemplateStartNodeArray(
   }
 
   startNode.llmConfig = llmConfig;
+
+  const kb = isPlainRecord(startNode.kb) ? { ...startNode.kb } : {};
+  if (!isPlainRecord(startNode.kb)) {
+    patchedFields.push('kb');
+  }
+  if (typeof kb.enabled !== 'boolean') {
+    kb.enabled = DEFAULT_NODE_KB_CONFIG.enabled;
+    patchedFields.push('kb.enabled');
+  }
+  if (!isFiniteNumber(kb.maxChunks)) {
+    kb.maxChunks = DEFAULT_NODE_KB_CONFIG.maxChunks;
+    patchedFields.push('kb.maxChunks');
+  }
+  if (!isFiniteNumber(kb.maxQueries)) {
+    kb.maxQueries = DEFAULT_NODE_KB_CONFIG.maxQueries;
+    patchedFields.push('kb.maxQueries');
+  }
+  if (typeof kb.smartSearch !== 'boolean') {
+    kb.smartSearch = DEFAULT_NODE_KB_CONFIG.smartSearch;
+    patchedFields.push('kb.smartSearch');
+  }
+  if (typeof kb.searchOnStart !== 'boolean') {
+    kb.searchOnStart = DEFAULT_NODE_KB_CONFIG.searchOnStart;
+    patchedFields.push('kb.searchOnStart');
+  }
+  startNode.kb = kb;
+
+  const beforeTools = Array.isArray(startNode.toolsIds) ? [...(startNode.toolsIds as unknown[])] : [];
+  const mergedTools = mergeNodeToolsIds(startNode.toolsIds, DEFAULT_TEMPLATE_NODE_TOOL_IDS);
+  if (JSON.stringify(beforeTools) !== JSON.stringify(mergedTools)) {
+    patchedFields.push('toolsIds');
+  }
+  startNode.toolsIds = mergedTools;
+
   nodes[startNodeIndex] = startNode;
 
   return {

@@ -71,7 +71,7 @@ export const PRICING: PricingSnapshot = {
     notes: [
       'Prices are approximate and subject to change — always link users to https://convocore.ai/pricing for current numbers.',
       'Every AI interaction costs 1 base credit ($0.001) PLUS LLM token usage based on the chosen model.',
-      'New agents should use gpt-5.6-luna (best quality/value). Fallback: gemini-3.1-flash-lite. Do not default to gpt-4o or other legacy models.',
+      'New agents should use deepseek-ai/DeepSeek-V4-Flash. Fallback: gpt-5.6-luna if Flash underperforms. Do not default to gpt-4o or other legacy models.',
       'Higher plans include every lower model tier (Business+ unlocks Tiers 1–4).',
       'Unused monthly credits do not roll over.',
     ],
@@ -234,10 +234,11 @@ export const PRICING: PricingSnapshot = {
     { model: 'Gemini 2.5 Flash', modelId: 'gemini-2.5-flash', provider: 'google', inputPerMillion: 0.45, outputPerMillion: 3.75, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Kimi-K2.6', modelId: 'moonshotai/Kimi-K2.6', provider: 'convocore', inputPerMillion: 1.43, outputPerMillion: 6.0, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Claude Haiku 4.5', modelId: 'claude-haiku-4-5-20251001', provider: 'anthropic', inputPerMillion: 1.5, outputPerMillion: 7.5, planTier: 3, unlocksOn: 'Starter+' },
+    { model: 'DeepSeek-V4-Flash', modelId: 'deepseek-ai/DeepSeek-V4-Flash', provider: 'convocore', inputPerMillion: 0.14, outputPerMillion: 0.28, planTier: 3, unlocksOn: 'Starter+', recommended: true },
     { model: 'DeepSeek-V4-Pro', modelId: 'deepseek-ai/DeepSeek-V4-Pro', provider: 'convocore', inputPerMillion: 2.63, outputPerMillion: 5.25, planTier: 3, unlocksOn: 'Starter+' },
 
     // Tier 2 — Pro+
-    { model: 'GPT-5.6 Luna', modelId: 'gpt-5.6-luna', provider: 'openai', inputPerMillion: 0.26, outputPerMillion: 1.56, planTier: 2, unlocksOn: 'Pro+', recommended: true },
+    { model: 'GPT-5.6 Luna', modelId: 'gpt-5.6-luna', provider: 'openai', inputPerMillion: 0.26, outputPerMillion: 1.56, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'GPT-5', modelId: 'gpt-5-2025-08-07', provider: 'openai', inputPerMillion: 1.88, outputPerMillion: 15.0, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'Gemini 3.5 Flash', modelId: 'gemini-3.5-flash', provider: 'google', inputPerMillion: 2.25, outputPerMillion: 13.5, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'GPT-4.1', modelId: 'gpt-4.1-2025-04-14', provider: 'openai', inputPerMillion: 3.0, outputPerMillion: 12.0, planTier: 2, unlocksOn: 'Pro+' },
