@@ -1020,7 +1020,7 @@ const PatchAgentPromptSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'Exact text to find in the prompt (whitespace-sensitive). Include enough surrounding context so the match is unique unless replace_all is true.'
+      'Text to find in the prompt. Prefer an exact copy from get_agent. Minor whitespace / line-ending drift is tolerated as a fallback; include enough surrounding context so the match is unique unless replace_all is true.'
     ),
   new_string: z
     .string()
@@ -1044,7 +1044,7 @@ const PatchAgentPromptSchema = z.object({
     .optional()
     .default(true)
     .describe(
-      'When patching the main prompt (auto/nodes0/vg_*), also apply the same exact replace to the other main prompt mirrors (nodes[0].instructions, vg_instructions, vg_systemPrompt) when they contain old_string. Default true.'
+      'When patching the main prompt (auto/nodes0/vg_*), also apply the same replace to the other main prompt mirrors (nodes[0].instructions, vg_instructions, vg_systemPrompt) when they contain old_string. Default true.'
     ),
 });
 
@@ -1055,7 +1055,7 @@ const PatchKbDocSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'Exact text to find in the KB field (whitespace-sensitive). Include enough surrounding context so the match is unique unless replace_all is true.'
+      'Text to find in the KB field. Prefer an exact copy from get_kb_doc. Minor whitespace / line-ending drift is tolerated as a fallback; include enough surrounding context so the match is unique unless replace_all is true.'
     ),
   new_string: z
     .string()
@@ -2058,8 +2058,12 @@ async function patchAgentPromptExact(args: {
   workingAgent = { ...workingAgent, ...agentPatch };
   if (agentPatch.nodes) workingAgent.nodes = agentPatch.nodes;
 
-  const patchedFields: Array<{ field: string; occurrences: number }> = [
-    { field: primary.label, occurrences: primaryResult.occurrences },
+  const patchedFields: Array<{ field: string; occurrences: number; mode: string }> = [
+    {
+      field: primary.label,
+      occurrences: primaryResult.occurrences,
+      mode: primaryResult.mode,
+    },
   ];
 
   const shouldSync =
@@ -2072,7 +2076,7 @@ async function patchAgentPromptExact(args: {
     for (const mirror of MAIN_PROMPT_TARGETS) {
       if (mirror === primaryTarget) continue;
       const current = readAgentTextField(workingAgent, mirror);
-      if (!current.text || !current.text.includes(args.old_string)) continue;
+      if (!current.text) continue;
       const mirrorResult = applyExactStringReplace(
         current.text,
         args.old_string,
@@ -2091,6 +2095,7 @@ async function patchAgentPromptExact(args: {
       patchedFields.push({
         field: current.label,
         occurrences: mirrorResult.occurrences,
+        mode: mirrorResult.mode,
       });
     }
   }
@@ -2106,6 +2111,7 @@ async function patchAgentPromptExact(args: {
     target: primaryTarget,
     patchedFields,
     replace_all: args.replace_all,
+    match_mode: primaryResult.mode,
     old_string_length: args.old_string.length,
     new_string_length: args.new_string.length,
     preview: {
@@ -2170,6 +2176,7 @@ async function patchKbDocExact(args: {
     docId: args.docId,
     field: args.field,
     occurrences: patched.occurrences,
+    match_mode: patched.mode,
     replace_all: args.replace_all,
     old_string_length: args.old_string.length,
     new_string_length: args.new_string.length,
@@ -3355,10 +3362,10 @@ const coreTools: Tool[] = [
   {
     name: 'patch_agent_prompt',
     description:
-      'Performs exact string replacements in an agent prompt or related text field — same idea as Cursor StrReplace for files. ' +
+      'Performs string replacements in an agent prompt or related text field — same idea as Cursor StrReplace for files. ' +
       'USE THIS instead of update_agent when the prompt is large and you only need to change a specific section. ' +
-      'Workflow: get_agent (or prior context) → copy the exact span into old_string (include enough surrounding lines so it is unique) → new_string is the replacement → this tool patches and PATCHes the agent. ' +
-      'old_string must match the current text exactly including whitespace. Prefer editing existing prompts with this tool over rewriting the whole instructions blob. ' +
+      'Workflow: get_agent (or prior context) → copy the span into old_string (include enough surrounding lines so it is unique) → new_string is the replacement → this tool patches and PATCHes the agent. ' +
+      'Prefer an exact copy from get_agent; if whitespace/line endings differ slightly the tool falls back to tolerant matching. Prefer this over rewriting the whole instructions blob. ' +
       'Only use replace_all=true when you intentionally want every occurrence changed. ' +
       'target=auto picks nodes[0].instructions when enableNodes/nodes exist, otherwise vg_instructions. ' +
       'By default also syncs the same replace onto the other main-prompt mirrors (nodes[0].instructions / vg_instructions / vg_systemPrompt) when they contain old_string.',
@@ -3372,7 +3379,7 @@ const coreTools: Tool[] = [
         old_string: {
           type: 'string',
           description:
-            'Exact text to find (whitespace-sensitive). MUST match the current prompt exactly. Include surrounding context so the match is unique unless replace_all is true.',
+            'Text to find. Prefer an exact copy from get_agent; minor whitespace/line-ending drift is tolerated. Include surrounding context so the match is unique unless replace_all is true.',
         },
         new_string: {
           type: 'string',
@@ -4181,10 +4188,10 @@ const coreTools: Tool[] = [
   {
     name: 'patch_kb_doc',
     description:
-      'Performs exact string replacements in a knowledge-base document — same idea as Cursor StrReplace for files. ' +
+      'Performs string replacements in a knowledge-base document — same idea as Cursor StrReplace for files. ' +
       'USE THIS instead of update_kb_doc when the document body is large and you only need to change a specific section. ' +
-      'Workflow: get_kb_doc → copy the exact span into old_string (include enough surrounding context to make it unique) → new_string is the replacement → this tool patches content (or name) and PATCHes the KB doc. ' +
-      'old_string must match the current field text exactly including whitespace. Prefer this over rewriting the entire content field. ' +
+      'Workflow: get_kb_doc → copy the span into old_string (include enough surrounding context to make it unique) → new_string is the replacement → this tool patches content (or name) and PATCHes the KB doc. ' +
+      'Prefer an exact copy from get_kb_doc; minor whitespace/line-ending drift is tolerated as a fallback. Prefer this over rewriting the entire content field. ' +
       'Only use replace_all=true when you intentionally want every occurrence changed.',
     inputSchema: {
       type: 'object',
@@ -4200,7 +4207,7 @@ const coreTools: Tool[] = [
         old_string: {
           type: 'string',
           description:
-            'Exact text to find in the KB field (whitespace-sensitive). MUST match exactly. Include surrounding context so the match is unique unless replace_all is true.',
+            'Text to find in the KB field. Prefer an exact copy from get_kb_doc; minor whitespace/line-ending drift is tolerated. Include surrounding context so the match is unique unless replace_all is true.',
         },
         new_string: {
           type: 'string',
