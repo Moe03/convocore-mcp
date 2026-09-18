@@ -145,7 +145,7 @@ const tools: Tool[] = [
   {
     name: 'create_kb_image',
     description:
-      'Upload images into the agent KB (optional auto-caption). Provide images[].sourceUrl and/or base64 data + mimeType, plus targetDocName.',
+      'Upload images into the agent KB (optional autoCaption). Backup after you already called read_image and labeled the photos in the system prompt — not a substitute for looking at them.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

@@ -131,6 +131,21 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 - **Fallback during testing:** if Flash underperforms (broken UI-Engine JSON, ignores instructions, hallucinates), switch to **\`gpt-5.6-luna\`** via \`update_agent\` / \`modelId\` and **tell the user** which model the agent ended on.
 - **Do not** pick legacy models: \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other old defaults.
 
+## CRITICAL — scraped images (you must LOOK at them)
+
+Interactive agents live or die on **real, correctly labeled photos**. Filename, alt text, and a URL in the scrape JSON are **not** understanding.
+
+After \`scrape_url\` (\`mode: "scrape"\`) on each important page:
+
+1. Collect candidate image URLs from the scrape (page images, og/hero, product/room/treatment galleries, team photos). Skip 1×1 pixels, tracking pixels, sprites, and tiny UI icons.
+2. \`scrape_url\` \`mode: "check"\` on those URLs — keep only \`ok\` responses with an image \`content-type\` and a real image extension (or CDN URL that still returns an image).
+3. **You must call \`read_image\` with \`url\` on every high-value photo** (products, rooms, treatments, devices, properties, before/after, team). The host will show you the pixels. Describe what you actually see.
+4. Bake a **labeled image catalog** into \`systemPrompt\` / \`nodes[0].instructions\`: exact URL + one-line caption of what the photo is (e.g. "Fusion 8 device, front 3/4 view"). Cards/carousels may use **only** these URLs.
+5. Optional backup: \`create_kb_image\` (\`autoCaption: true\`) so RAG has the pictures too — this does **not** replace you looking with \`read_image\`.
+6. Never dump unlabeled URL lists. Never invent image URLs. Never use the logo as a stand-in for a product photo.
+
+If \`read_image\` fails for a URL, drop it. Do not put a broken link on a card.
+
 ## CRITICAL — KB vs system prompt (node agents)
 
 **Root cause of "KB exists but agent says I don't know":** uploading docs under \`agentId\` is **not** enough by itself. Node agents need **\`nodes[0].kb.enabled: true\`** for automatic retrieval.
@@ -143,10 +158,23 @@ After create: verify with \`interact_with_agent\` fact questions that only the k
 
 ## CRITICAL — main prompt & agent schema (nodes only)
 
-- **Always node-based.** MCP forces \`enableNodes=true\` on create/update. Do **not** set \`enableNodes\`, \`vg_instructions\`, or \`vg_systemPrompt\` as caller inputs.
-- **Canonical main prompt** = \`nodes[0].instructions\`. Pass it as \`systemPrompt\` on \`create_agent\` / \`create_agent_from_template\` / \`update_agent\` (MCP writes the start node + silent API mirrors).
+- **Always node-based.** MCP forces \`enableNodes=true\` on create/update. Do **not** set \`enableNodes\`, \`vg_instructions\`, or \`vg_systemPrompt\` as caller inputs — the API **rejects** \`vg_instructions\` / \`vg_systemPrompt\` as unknown top-level fields. \`update_agent\` / \`create_agent\` strip them automatically.
+- **Canonical main prompt** = \`nodes[0].instructions\`. Pass it as \`systemPrompt\` on \`create_agent\` / \`create_agent_from_template\` / \`update_agent\`.
 - Prefer \`create_agent_from_template\` for website/branded agents. Use raw \`create_agent\` only for advanced control.
-- Large prompt edits: \`patch_agent_prompt\` (\`old_string\` → \`new_string\`) targeting \`nodes0\` / \`auto\` — not rewriting via \`vg_instructions\`.
+- Large prompt edits: \`patch_agent_prompt\` (\`old_string\` → \`new_string\`) targeting \`nodes0\` / \`auto\`. If get_agent shows an empty prompt, do **not** surgical-patch (that used to replace the entire prompt with \`new_string\`). Use \`update_agent\` + **full** \`systemPrompt\` instead.
+- **Never PATCH a partial \`nodes\` array as a full replace**, and **omit \`nodes\` entirely** on unrelated updates (title, UI flags, funnel, model). MCP GET-merges by node id and will refuse a partial graph when get_agent did not return nodes. Still prefer \`systemPrompt\` for prompt writes.
+
+## CRITICAL — AI Funnel & lead scoring (NOT a custom HTTP webhook)
+
+Convocore already has a built-in **AI Funnel + lead score** system on the agent:
+
+- Field: **\`funnelConfig\`** — \`enabled\`, \`steps[]\` (id/name/description/condition/points/category), \`notificationRules[]\` (\`type\`: \`score_threshold\` | \`steps_completed\` | \`data_collected\`, \`recipients\` emails, \`cooldownStrategy\`, optional \`scoreThreshold\` / \`requiredSteps\` / \`requiredFields\`).
+- Field: **\`leadCollectionRules\`** — when to persist a CRM lead (default: email or phone present).
+- Runtime scores the conversation and **emails \`notificationRules.recipients\`** when a rule fires (hot-lead notify). This **is** the sales funnel. Clones do **not** inherit funnel recipients — set them again.
+- Template create: pass **\`ownerNotifyEmails\`** — MCP installs a default lead-score funnel + UI Engine form notify to those inboxes.
+- **Do NOT** create HTTP tools like \`notify_sales_team_new_lead\` with placeholder \`serverUrl\`. That is wrong. Use \`funnelConfig\` / \`update_agent\` / \`create_agent_from_template\`.
+- CRM backup: \`leads_write\` action=create when the visitor gives contact details.
+- UI Engine forms still collect structured fields; funnel scores + emails; CRM stores the lead.
 
 ## CRITICAL — list tools: compact by default
 
@@ -173,11 +201,13 @@ When the user asks to create an agent for a website/URL (or similar), run this e
 3. **Scrape at least 10 distinct pages** with \`scrape_url\` (\`mode: "scrape"\`, **\`useProxy=false\`**) before writing the prompt. Cover: home, about, offerings, pricing (if any), contact, and other high-value pages. Parallelize when safe.
 4. If a page is blocked without proxy: **stop and ask the user** whether to retry with proxy (much more expensive — ~60 credits/page vs ~1; burns workspace credits). Only after they confirm, retry with \`useProxy: true\` + \`confirmExpensiveProxy: true\`. Never turn on proxy silently.
 5. Extract brand: primary hex (\`primaryColor\`), logo/favicon (\`widgetImageUrl\`), tone, languages, CTAs, audience.
+6. **Post-process images (mandatory):** collect gallery/product/room/treatment photos from those scrapes → \`scrape_url\` \`mode: "check"\` → **\`read_image\` with \`url\` on each keeper** so you see what it is → labeled URL catalog in the prompt. Do not skip this.
 
 ### Phase 2 — Write a comprehensive \`systemPrompt\` (PRIMARY knowledge)
 Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that includes:
 - Who the business is, what they sell/do, who they serve, geography
-- Products/services/room or item **categories** with specifics from scraped pages (names, amenities, images that actually scraped)
+- Products/services/room or item **categories** with specifics from scraped pages (names, amenities)
+- A **labeled image catalog**: only URLs you personally inspected with \`read_image\`, each with what the photo shows. UI Engine cards must use this catalog.
 - Indicative pricing **only when scraped** — never invent per-SKU / per-room / per-date rates. Still try hard: scrape room/item pages normally, and if blocked ask the user to confirm **proxy** scrape. For hotel chains and dynamic-rate sites: bake whatever categories/amenities/images you did get; state "from $X" honesty + booking link when live rates aren't scrapable; prefer a live rates API tool when the brand exposes one
 - Tone, language rules, what to do / never do
 - Lead-capture / form behavior (template also appends a standard lead-capture clause)
@@ -187,8 +217,8 @@ Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that 
 **Do not** rely on KB alone. Prompt = source of truth; KB = backup retrieval.
 
 ### Phase 3 — Create the agent
-1. Call \`create_agent_from_template\` with: \`title\`, **full \`systemPrompt\`**, \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\`, \`ownerNotifyEmails\` (workspace owner), voice as needed.
-   Defaults already enable: \`enableAutoRag\`, forms + form-notify, standard prompt clauses, DeepSeek-V4-Flash.
+1. Call \`create_agent_from_template\` with: \`title\`, **full \`systemPrompt\`**, \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\`, \`ownerNotifyEmails\` (sales inbox — also wires **funnelConfig** email notify), voice as needed.
+ Defaults already enable: \`enableAutoRag\`, forms + form-notify, **funnelConfig + leadCollectionRules**, standard prompt clauses, DeepSeek-V4-Flash.
 2. Return \`prototypeUrl\` immediately. Note \`modelIdUsed\` and \`webSearchTool\` from the response.
 3. Do **not** pass \`enableNodes\` / \`vg_instructions\`.
 
@@ -198,10 +228,10 @@ Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that 
 3. Ask: does this business expose a **public rates/availability API**? If yes, wire \`create_agent_tool\` for live pricing instead of static scrape.
 
 ### Phase 5 — Lead capture path (required for commercial sites)
-1. Template enables \`vg_enableUIEngineForms\` + \`vg_uiEngineFormNotifyConfig.enabled\`. Pass \`ownerNotifyEmails\`.
-2. Prompt must instruct the agent to render a lead form on buying/booking intent.
-3. Backup: when the user gives contact info, also \`leads_write\` action=create so CRM has the lead even if email notify fails.
-4. If email notify proves unreliable and the owner needs email: wire an HTTP email/webhook tool and test with \`test_agent_tool\`.
+1. Template enables \`vg_enableUIEngineForms\` + form notify **and** \`funnelConfig\` (AI Funnel / lead scoring). Pass \`ownerNotifyEmails\` so funnel \`notificationRules\` email sales on hot leads.
+2. Prompt must instruct the agent to render a lead form on buying/booking intent **and** qualify into the funnel (contact, intent, timeline, offering). Never invent a notify-sales HTTP tool.
+3. Backup: when the user gives contact info, also \`leads_write\` action=create so CRM has the lead.
+4. Existing agents missing a funnel: \`update_agent\` with \`funnelConfig\` (use default steps + \`notificationRules.recipients\`) + \`leadCollectionRules\`. Do **not** wait on a webhook URL from the customer.
 
 ### Phase 6 — Mandatory test protocol (8–12 turns) — do NOT skip
 Use \`interact_with_agent\` with \`isTest: true\` for a multi-turn conversation covering at least:
@@ -213,7 +243,7 @@ Use \`interact_with_agent\` with \`isTest: true\` for a multi-turn conversation 
 6. Buying-intent message (form / lead path triggers; CRM \`leads_write\` if contact given)
 7. Unknown-data question (built-in web-search should fire, else honest "don't know")
 8. Rephrased earlier question (anti-repetition)
-9. Image/card rendering with **only confirmed real URLs**
+9. Image/card rendering using **labeled catalog URLs only** (the photos you \`read_image\`'d — not a random hero)
 Plus \`run_agent_auto_test\` (full / with-tools) when feasible.
 **Report a short test transcript summary to the user.** Agent is not done until this protocol passes. Single-turn smoke tests are insufficient.
 
@@ -368,10 +398,10 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **Runtime RAG:** \`nodes[0].kb.enabled=true\` (default on template create). Without it, docs sit unused. Still bake critical facts into the system prompt.
 - Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\` — use the **8–12 turn** protocol for new website agents.
 - **Surgical KB edits:** for large docs use \`patch_kb_doc\` instead of full rewrites.
-- **Validate links/images:** \`scrape_url\` mode \`check\`. Branding extract: mode \`scrape\`.
+- **Validate links/images:** \`scrape_url\` mode \`check\`. Then **\`read_image\`** on keepers so you know what each photo is. Branding extract: mode \`scrape\`.
 - **HTTP tools / variables:** CRUD via \`list_agent_tools\` / …. Test with \`test_agent_tool_request\` then \`test_agent_tool\` / \`run_agent_auto_test\`.
 - **Built-in web-search:** template sets \`nodes[0].toolsIds\` to include \`web-search\` (Convocore defaultSystemTools — not a custom HTTP/SerpAPI tool). Disable with \`attachWebSearchTool=false\` if needed.
-- **Buying-intent lead capture is not optional** for commercial-website agents: forms + notify + \`leads_write\` backup, verified in testing.
+- **Buying-intent lead capture is not optional** for commercial-website agents: UI Engine forms + **\`funnelConfig\` email notify** + \`leads_write\` CRM backup. Never a custom HTTP sales webhook.
 
 ---
 
@@ -385,7 +415,8 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 
 ## Quick decision tree
 
-- **"Create an agent for this website / URL"** → scrape ≥10 → bake facts into \`systemPrompt\` (not KB-only) → \`create_agent_from_template\` (auto RAG + forms notify) → KB ingest → lead path → **8–12 turn tests** → report transcript summary + \`prototypeUrl\`.
+- **"Create an agent for this website / URL"** → scrape ≥10 → **\`read_image\` every important photo** → bake facts + **labeled image catalog** into \`systemPrompt\` → \`create_agent_from_template\` (auto RAG + forms + **funnelConfig** via \`ownerNotifyEmails\`) → KB ingest → **8–12 turn tests** (including a card with a real labeled photo) → report transcript summary + \`prototypeUrl\`.
+- **"Notify sales / lead funnel / lead score / email us new leads"** → \`funnelConfig\` + \`leadCollectionRules\` + \`ownerNotifyEmails\`. Do **not** \`create_agent_tool\` for notify-sales.
 - **"Agent ignores KB / says I don't know"** → confirm \`nodes[0].kb.enabled\`; still patch missing facts into \`systemPrompt\`; re-test fact lookup.
 - **"Scrape blocked / need proxy"** → ask user first (proxy ~60 credits/page vs ~1; burns workspace credits). Only after yes: \`scrape_url\` \`mode=scrape\` + \`useProxy=true\` + \`confirmExpensiveProxy=true\`.
 - **"I created an agent / let me try it / demo link"** → use \`prototypeUrl\` from the tool result, or build \`https://app.convocore.ai/{eu|na}/prototype/{agentId}\` — never \`/agents/\`.
@@ -393,7 +424,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"List agents / convos / KB / leads / orgs / clients"** → matching list tool with **\`mode=compact\`** (default). Escalate to \`full\` or \`get_*\` only when needed.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (compact + cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
-- **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create.
+- **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create. Then re-set \`funnelConfig.notificationRules.recipients\` (clones do not inherit them).
 - **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\` (list actions: compact). Mutate with \`*_write\`.
 - **"CRM leads"** → \`leads_read\` / \`leads_write\` (list: compact).
 - **"Add / test an HTTP tool or variable"** → \`create_agent_tool\` / \`create_agent_variable\` → \`test_agent_tool_request\` or \`test_agent_tool\` / \`run_agent_auto_test\`.

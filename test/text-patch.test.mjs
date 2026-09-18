@@ -6,6 +6,8 @@ import {
   findWhitespaceFlexibleMatches,
   nearestMatchHint,
   unwrapRecord,
+  unwrapAgentRecord,
+  resolvePromptPatch,
 } from '../dist/text-patch.js';
 
 describe('text-patch', () => {
@@ -143,5 +145,43 @@ describe('text-patch', () => {
   it('unwraps data envelopes', () => {
     assert.deepEqual(unwrapRecord({ data: { ID: 'a' } }), { ID: 'a' });
     assert.deepEqual(unwrapRecord({ ID: 'b' }), { ID: 'b' });
+  });
+
+  it('unwrapAgentRecord prefers the nested object that has nodes', () => {
+    const agent = unwrapAgentRecord({
+      data: {
+        agent: {
+          ID: 'abc',
+          nodes: [{ id: '__start__', type: 'start', instructions: 'keep me' }],
+        },
+      },
+    });
+    assert.equal(agent.ID, 'abc');
+    assert.equal(agent.nodes[0].instructions, 'keep me');
+  });
+
+  it('refuses a surgical patch when get_agent returned an empty prompt', () => {
+    const result = resolvePromptPatch({
+      currentText: '',
+      oldString: 'Hello Ivy',
+      newString: 'Hello Max',
+      fieldLabel: 'nodes[0].instructions',
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.error, /Refusing to write new_string as the entire prompt/i);
+    }
+  });
+
+  it('allows installing a full prompt when the field is empty and old_string is empty', () => {
+    const result = resolvePromptPatch({
+      currentText: '   ',
+      oldString: '',
+      newString: 'You are Ivy.',
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.updated, 'You are Ivy.');
+    }
   });
 });

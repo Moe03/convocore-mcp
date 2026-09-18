@@ -252,3 +252,91 @@ export function unwrapRecord(payload: unknown): Record<string, any> {
   }
   return root;
 }
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function looksLikeAgentRecord(value: Record<string, any>): boolean {
+  return (
+    Array.isArray(value.nodes) ||
+    typeof value.ID === 'string' ||
+    typeof value.id === 'string' ||
+    typeof value.vg_instructions === 'string' ||
+    typeof value.title === 'string'
+  );
+}
+
+/**
+ * GET /agents/{id} envelopes vary ({ data }, { data: { agent } }, { agent }).
+ * Prefer the nested object that actually has nodes[] so updates do not PATCH
+ * a skeleton graph and wipe the live prompt.
+ */
+export function unwrapAgentRecord(payload: unknown): Record<string, any> {
+  const candidates: Record<string, any>[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (!isPlainObject(value) || depth > 5) return;
+    candidates.push(value);
+    visit(value.data, depth + 1);
+    visit(value.agent, depth + 1);
+    visit(value.result, depth + 1);
+    visit(value.payload, depth + 1);
+  };
+  visit(payload, 0);
+
+  const withNodes = candidates.find(
+    (c) => Array.isArray(c.nodes) && c.nodes.length > 0
+  );
+  if (withNodes) return withNodes;
+
+  const scored = candidates.find(looksLikeAgentRecord);
+  if (scored) return scored;
+
+  return unwrapRecord(payload);
+}
+
+/**
+ * Surgical prompt edit. Never treat "GET returned empty instructions" as
+ * permission to replace the whole prompt with new_string when old_string is set —
+ * that is how patch_agent_prompt nuked live prompts.
+ */
+export function resolvePromptPatch(args: {
+  currentText: string;
+  oldString: string;
+  newString: string;
+  replaceAll?: boolean;
+  fieldLabel?: string;
+}): ExactReplaceResult {
+  const currentText = args.currentText ?? '';
+  const oldString = args.oldString ?? '';
+  const label = args.fieldLabel ?? 'prompt';
+
+  if (!currentText.trim()) {
+    if (oldString.trim()) {
+      return {
+        ok: false,
+        error:
+          `${label} came back empty from get_agent, but old_string was set. ` +
+          'Refusing to write new_string as the entire prompt (that wipes the live agent). ' +
+          'Re-fetch get_agent and copy the exact span, or use update_agent systemPrompt with the FULL prompt.',
+        occurrences: 0,
+      };
+    }
+    return {
+      ok: true,
+      updated: args.newString,
+      occurrences: 1,
+      mode: 'exact',
+    };
+  }
+
+  if (!oldString) {
+    return {
+      ok: false,
+      error: `${label} is not empty. Pass old_string to replace a span, or use update_agent systemPrompt for a full rewrite.`,
+      occurrences: 0,
+    };
+  }
+
+  return applyExactStringReplace(currentText, oldString, args.newString, args.replaceAll ?? false);
+}

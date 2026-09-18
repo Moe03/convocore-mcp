@@ -42,15 +42,31 @@ import {
 } from './template-start-node.js';
 import { appendStandardPromptSections } from './agent-prompt-standards.js';
 import {
+  applySystemPromptToExistingNodes,
+  mergeAgentNodesForUpdate,
+  readStartNodeInstructions,
+  startNodeIndex,
+  writeStartNodeInstructions,
+} from './merge-agent-nodes.js';
+import {
   DEFAULT_TEMPLATE_NODE_TOOL_IDS,
   mergeNodeToolsIds,
   WEB_SEARCH_BUILTIN_ID,
 } from './builtin-system-tools.js';
+import {
+  FunnelConfigSchema,
+  LeadCollectionRulesSchema,
+  buildDefaultLeadFunnelConfig,
+  DEFAULT_LEAD_COLLECTION_RULES,
+  stripDeprecatedAgentFields,
+} from './funnel-config.js';
 import { UI_ENGINE_PRIMER, UI_ENGINE_SPEC } from './ui-engine-spec.js';
 import { CHANNEL_INTEGRATION_SPEC } from './channel-integration-spec.js';
 import { handleAutoGenPallet } from './agent-theme-palette.js';
 import {
   applyExactStringReplace,
+  resolvePromptPatch,
+  unwrapAgentRecord,
   unwrapRecord,
 } from './text-patch.js';
 import {
@@ -415,6 +431,33 @@ const AgentUiEngineInputSchemaProperties = {
   },
 } as const;
 
+const FunnelAndLeadsInputSchemaProperties = {
+  funnelConfig: {
+    type: 'object',
+    description:
+      'AI Funnel & Lead Scoring (built-in). Use this instead of a custom HTTP “notify sales team” webhook. ' +
+      'enabled + steps (id/name/description/condition/points/category) + notificationRules (type score_threshold|steps_completed|data_collected, recipients emails, cooldownStrategy). ' +
+      'Runtime scores the conversation and emails recipients when a rule fires.',
+    properties: {
+      enabled: { type: 'boolean' },
+      maxScore: { type: 'number' },
+      evaluateOnUserMessage: { type: 'boolean' },
+      evaluateOnAIMessage: { type: 'boolean' },
+      steps: { type: 'array', items: { type: 'object' } },
+      notificationRules: { type: 'array', items: { type: 'object' } },
+    },
+  },
+  leadCollectionRules: {
+    type: 'object',
+    description:
+      'When to persist a CRM lead. Default: collect when email, phone, or phone_number is present.',
+    properties: {
+      enabled: { type: 'boolean' },
+      rules: { type: 'array', items: { type: 'object' } },
+    },
+  },
+} as const;
+
 const CreateAgentSchema = z.object({
   title: z.string().describe('The title of the agent'),
   description: z.string().optional().describe('A brief description of the agent'),
@@ -440,6 +483,10 @@ const CreateAgentSchema = z.object({
     .record(z.any())
     .optional()
     .describe('Escape hatch for advanced fields. Do not use for the main prompt — use systemPrompt / nodes[0].instructions.'),
+  funnelConfig: FunnelConfigSchema.optional().describe(
+    'AI Funnel & Lead Scoring. Use this instead of a custom HTTP notify-sales webhook. Set enabled + steps + notificationRules.recipients.'
+  ),
+  leadCollectionRules: LeadCollectionRulesSchema.optional(),
 }).merge(AgentUiEngineFieldsSchema);
 
 const HexColorSchema = z
@@ -513,7 +560,7 @@ const CreateAgentFromTemplateSchema = z
       .optional()
       .default(true)
       .describe(
-        'When true (default), appends anti-repetition, lead-capture, knowledge-source, web-search, and dynamic-pricing honesty clauses to systemPrompt.'
+        'When true (default), appends anti-repetition, lead-capture, knowledge-source, web-search, dynamic-pricing honesty, and labeled-photos clauses to systemPrompt.'
       ),
     attachWebSearchTool: z
       .boolean()
@@ -527,8 +574,12 @@ const CreateAgentFromTemplateSchema = z
       .max(10)
       .optional()
       .describe(
-        'Emails for vg_uiEngineFormNotifyConfig.extraEmails (lead form submissions). Prefer the workspace owner email. If omitted, form notify is still enabled for workspace defaults.'
+        'Sales/owner emails. Used for (1) UI Engine form notify extraEmails AND (2) funnelConfig.notificationRules recipients. Prefer workspace owner / sales inbox. Do NOT create a custom HTTP webhook for this.'
       ),
+    funnelConfig: FunnelConfigSchema.optional().describe(
+      'Override the default AI Funnel & Lead Scoring. If omitted and ownerNotifyEmails is set, MCP installs a default lead-score funnel that emails those recipients.'
+    ),
+    leadCollectionRules: LeadCollectionRulesSchema.optional(),
     modelId: z
       .string()
       .optional()
@@ -587,12 +638,16 @@ const UpdateAgentSchema = z.object({
     .array(AgentNodeSchema)
     .optional()
     .describe(
-      'Full nodes array if replacing nodes. Main prompt MUST be nodes[0].instructions. Prefer systemPrompt or patch_agent_prompt for prompt-only changes.'
+      'Optional node patch. MCP GET-merges onto existing nodes by id. Never send a partial start node as a full graph. Prefer systemPrompt / patch_agent_prompt for prompt edits. Unrelated updates (title, UI flags, funnel) should omit nodes entirely.'
     ),
   additionalConfig: z
     .record(z.any())
     .optional()
-    .describe('Escape hatch for advanced fields. Do not put the main prompt here.'),
+    .describe('Escape hatch for advanced fields. Do not put the main prompt here. Never set ownerID or vg_instructions.'),
+  funnelConfig: FunnelConfigSchema.optional().describe(
+    'AI Funnel & Lead Scoring. Prefer this over creating a custom HTTP notify-sales tool. Pass notificationRules.recipients with sales emails.'
+  ),
+  leadCollectionRules: LeadCollectionRulesSchema.optional(),
 }).merge(AgentUiEngineFieldsSchema);
 
 const DeleteAgentSchema = z.object({
@@ -1018,9 +1073,10 @@ const PatchAgentPromptSchema = z.object({
   agentId: z.string().describe('The agent ID whose prompt to patch'),
   old_string: z
     .string()
-    .min(1)
+    .optional()
+    .default('')
     .describe(
-      'Text to find in the prompt. Prefer an exact copy from get_agent. Minor whitespace / line-ending drift is tolerated as a fallback; include enough surrounding context so the match is unique unless replace_all is true.'
+      'Text to find. Copy the exact span from get_agent. If get_agent returns empty instructions, this tool REFUSES a surgical patch (it will not replace the whole prompt with new_string). Only omit old_string when the field is truly empty and new_string is the FULL prompt.'
     ),
   new_string: z
     .string()
@@ -1037,14 +1093,14 @@ const PatchAgentPromptSchema = z.object({
     .optional()
     .default('auto')
     .describe(
-      'Which field to patch. auto = nodes[0].instructions when enableNodes/nodes exist, else vg_instructions. Use customCSS for widget CSS surgical edits.'
+      'Which field to patch. auto and vg_instructions/vg_systemPrompt all write nodes[0].instructions (API rejects vg_* prompt fields). Use customCSS for widget CSS surgical edits.'
     ),
   sync_mirrors: z
     .boolean()
     .optional()
-    .default(true)
+    .default(false)
     .describe(
-      'When patching the main prompt (auto/nodes0/vg_*), also apply the same replace to the other main prompt mirrors (nodes[0].instructions, vg_instructions, vg_systemPrompt) when they contain old_string. Default true.'
+      'Default false. Do not sync to vg_instructions / vg_systemPrompt — those fields are rejected by the API. Keep patches on nodes[0].instructions only.'
     ),
 });
 
@@ -1717,11 +1773,15 @@ function buildTemplateStartNode(
 }
 
 /**
- * Force enableNodes=true and keep the canonical prompt on nodes[0].instructions.
- * Silently mirrors to vg_instructions / vg_systemPrompt for API compatibility —
- * callers should not set those fields; schemas no longer expose them.
+ * Keep the canonical prompt on the start node's instructions.
+ * Create always sends enableNodes=true.
+ * Update only sends enableNodes when nodes[] is also present — a bare
+ * enableNodes:true PATCH has been observed to reset the graph to an empty start node.
  */
-function normalizeNodesEnabledAgentPayload(fields: Record<string, unknown>): Record<string, unknown> {
+function normalizeNodesEnabledAgentPayload(
+  fields: Record<string, unknown>,
+  options?: { mode?: 'create' | 'update' }
+): Record<string, unknown> {
   const {
     systemPrompt: systemPromptRaw,
     enableNodes: _ignoreEnableNodes,
@@ -1736,44 +1796,42 @@ function normalizeNodesEnabledAgentPayload(fields: Record<string, unknown>): Rec
       ? systemPromptRaw.trim()
       : undefined;
 
+  const mode = options?.mode ?? 'create';
   let nodes = Array.isArray(nodesRaw) ? [...nodesRaw] : undefined;
   if (systemPrompt) {
     if (!nodes || nodes.length === 0) {
+      if (mode === 'update') {
+        throw new Error(
+          'update_agent systemPrompt requires the live nodes[] from get_agent. Refusing to invent a new start node (that wipes the graph). Retry get_agent, then patch_agent_prompt or pass the FULL prompt again.'
+        );
+      }
       nodes = [buildTemplateStartNode(systemPrompt)];
     } else {
-      const first =
-        nodes[0] && typeof nodes[0] === 'object'
-          ? { ...(nodes[0] as Record<string, unknown>) }
-          : {};
-      first.instructions = systemPrompt;
-      nodes = [first, ...nodes.slice(1)];
+      const list = nodes.filter(isPlainRecord).map((n) => ({ ...n }));
+      const idx = startNodeIndex(list);
+      list[idx] = { ...list[idx], instructions: systemPrompt };
+      nodes = list;
     }
   }
 
-  if (nodes) {
+  // Create-time defaults fill missing instructions with "". That wiped live
+  // prompts when update_agent received a partial node (toolsIds-only).
+  if (nodes && mode !== 'update') {
     nodes = normalizeTemplateAgentNodesForCreate(nodes);
   }
 
-  const promptFromNodes =
-    nodes &&
-    nodes[0] &&
-    typeof nodes[0] === 'object' &&
-    typeof (nodes[0] as any).instructions === 'string'
-      ? String((nodes[0] as any).instructions)
-      : undefined;
-  const prompt = systemPrompt || promptFromNodes;
-
-  const out: Record<string, unknown> = {
-    ...rest,
-    enableNodes: true,
-  };
-  if (nodes) out.nodes = nodes;
-  // Silent mirrors for backends that still read these fields
-  if (prompt) {
-    out.vg_instructions = prompt;
-    out.vg_systemPrompt = prompt;
+  const out: Record<string, unknown> = { ...rest };
+  if (mode === 'update') {
+    if (nodes) {
+      out.enableNodes = true;
+      out.nodes = nodes;
+    }
+  } else {
+    out.enableNodes = true;
+    if (nodes) out.nodes = nodes;
   }
-  return out;
+  // Do NOT set vg_instructions / vg_systemPrompt — current Convocore API rejects them as unknown top-level fields.
+  return stripDeprecatedAgentFields(out);
 }
 
 function normalizeTemplateAgentNodesForCreate(
@@ -1938,7 +1996,8 @@ function resolveCanonicalPromptTarget(agent: Record<string, any>): 'nodes0' | 'v
   if (enableNodes && nodes && nodes[0] && typeof nodes[0] === 'object') {
     return 'nodes0';
   }
-  return 'vg_instructions';
+  // Legacy vg_instructions is no longer a writable API field — still read it if that's all that exists.
+  return 'nodes0';
 }
 
 function readAgentTextField(
@@ -1946,10 +2005,8 @@ function readAgentTextField(
   target: Exclude<AgentPromptTarget, 'auto'>
 ): { text: string; label: string } {
   if (target === 'nodes0') {
-    const nodes = Array.isArray(agent.nodes) ? agent.nodes : [];
-    const first = nodes[0] && typeof nodes[0] === 'object' ? nodes[0] : null;
-    const text = typeof first?.instructions === 'string' ? first.instructions : '';
-    return { text, label: 'nodes[0].instructions' };
+    const start = readStartNodeInstructions(agent);
+    return { text: start.text, label: start.label };
   }
   if (target === 'vg_instructions') {
     return {
@@ -1982,24 +2039,11 @@ function applyPatchToAgentObject(
 ): Record<string, any> {
   const patch: Record<string, any> = {};
   if (target === 'nodes0') {
-    const nodes = Array.isArray(agent.nodes)
-      ? agent.nodes.map((n: any) => (n && typeof n === 'object' ? { ...n } : n))
-      : [];
-    if (nodes.length === 0) {
-      nodes.push({ name: 'Start', type: 'start', instructions: updatedText });
-    } else {
-      nodes[0] = { ...(nodes[0] || {}), instructions: updatedText };
-    }
-    patch.nodes = nodes;
+    patch.nodes = writeStartNodeInstructions(agent, updatedText);
     return patch;
   }
-  if (target === 'vg_instructions') {
-    patch.vg_instructions = updatedText;
-    return patch;
-  }
-  if (target === 'vg_systemPrompt') {
-    patch.vg_systemPrompt = updatedText;
-    return patch;
+  if (target === 'vg_instructions' || target === 'vg_systemPrompt') {
+    return applyPatchToAgentObject(agent, 'nodes0', updatedText);
   }
   if (target === 'proactiveMessage') {
     patch.proactiveMessage = updatedText;
@@ -2024,27 +2068,40 @@ async function patchAgentPromptExact(args: {
   sync_mirrors: boolean;
 }): Promise<Record<string, unknown>> {
   const raw = await getActiveClient().getAgent(args.agentId);
-  const agent = unwrapRecord(raw);
-  if (!agent || Object.keys(agent).length === 0) {
-    throw new Error(`Agent ${args.agentId} not found or returned empty payload`);
+  const agent = unwrapAgentRecord(raw);
+  const agentId = typeof agent.ID === 'string' ? agent.ID : typeof agent.id === 'string' ? agent.id : '';
+  if (!agentId) {
+    throw new Error(`Agent ${args.agentId} not found or returned an envelope without the agent record — refusing prompt patch so we do not wipe the live agent.`);
   }
 
-  const primaryTarget =
+  const primaryTargetRaw =
     args.target === 'auto' ? resolveCanonicalPromptTarget(agent) : args.target;
+  const primaryTarget: Exclude<AgentPromptTarget, 'auto'> =
+    primaryTargetRaw === 'vg_instructions' || primaryTargetRaw === 'vg_systemPrompt'
+      ? 'nodes0'
+      : primaryTargetRaw;
   const primary = readAgentTextField(agent, primaryTarget);
-  if (!primary.text) {
+  const currentText = typeof primary.text === 'string' ? primary.text : '';
+  const oldString = args.old_string ?? '';
+
+  const liveNodeCount = Array.isArray(agent.nodes) ? agent.nodes.length : 0;
+  if (
+    primaryTarget === 'nodes0' &&
+    oldString.trim() &&
+    (liveNodeCount === 0 || !currentText.trim())
+  ) {
     throw new Error(
-      `Target field ${primary.label} is empty or missing on agent ${args.agentId}. ` +
-        'Re-check with get_agent, or pass an explicit target.'
+      `${primary.label} is empty or nodes[] is missing on get_agent. Refusing surgical patch_agent_prompt — writing new_string would replace the entire live prompt/graph. Re-fetch get_agent or use update_agent systemPrompt with the FULL prompt.`
     );
   }
 
-  const primaryResult = applyExactStringReplace(
-    primary.text,
-    args.old_string,
-    args.new_string,
-    args.replace_all
-  );
+  const primaryResult = resolvePromptPatch({
+    currentText,
+    oldString,
+    newString: args.new_string,
+    replaceAll: args.replace_all,
+    fieldLabel: primary.label,
+  });
   if (!primaryResult.ok) {
     throw new Error(`${primary.label}: ${primaryResult.error}`);
   }
@@ -2066,15 +2123,13 @@ async function patchAgentPromptExact(args: {
     },
   ];
 
-  const shouldSync =
-    args.sync_mirrors &&
-    (primaryTarget === 'nodes0' ||
-      primaryTarget === 'vg_instructions' ||
-      primaryTarget === 'vg_systemPrompt');
+  const shouldSync = args.sync_mirrors === true && primaryTarget === 'nodes0';
 
   if (shouldSync) {
     for (const mirror of MAIN_PROMPT_TARGETS) {
       if (mirror === primaryTarget) continue;
+      // Never PATCH deprecated top-level prompt fields — API rejects vg_instructions / vg_systemPrompt.
+      if (mirror === 'vg_instructions' || mirror === 'vg_systemPrompt') continue;
       const current = readAgentTextField(workingAgent, mirror);
       if (!current.text) continue;
       const mirrorResult = applyExactStringReplace(
@@ -2101,7 +2156,7 @@ async function patchAgentPromptExact(args: {
   }
 
   const result = await getActiveClient().updateAgent(args.agentId, {
-    agent: agentPatch,
+    agent: stripDeprecatedAgentFields(agentPatch),
   });
 
   return {
@@ -2703,6 +2758,8 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     appendStandardPromptClauses,
     attachWebSearchTool,
     ownerNotifyEmails,
+    funnelConfig: inputFunnelConfig,
+    leadCollectionRules: inputLeadCollectionRules,
     modelId: modelIdOverride,
     additionalConfig,
   } = args;
@@ -2864,8 +2921,6 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
         : {}),
     },
     vg_defaultModel: chatModelId,
-    vg_systemPrompt: systemPromptResolved,
-    vg_instructions: systemPromptResolved,
     voiceConfig: resolvedVoice,
     nodes: [
       buildTemplateStartNode(systemPromptResolved, {
@@ -2880,6 +2935,14 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     chatBgURL,
     branding,
   };
+
+  const funnelResolved =
+    inputFunnelConfig ??
+    (ownerNotifyEmails && ownerNotifyEmails.length > 0
+      ? buildDefaultLeadFunnelConfig(ownerNotifyEmails)
+      : buildDefaultLeadFunnelConfig([]));
+  agentCore.funnelConfig = funnelResolved;
+  agentCore.leadCollectionRules = inputLeadCollectionRules ?? DEFAULT_LEAD_COLLECTION_RULES;
 
   if (nodesSettings) {
     agentCore.nodesSettings = nodesSettings;
@@ -2897,8 +2960,9 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   payload.agent.vg_enableUIEngine = true;
   payload.agent.vg_enableUIEngineForms = true;
   payload.agent.vg_defaultModel = chatModelId;
-  payload.agent.vg_systemPrompt = systemPromptResolved;
-  payload.agent.vg_instructions = systemPromptResolved;
+  delete payload.agent.vg_systemPrompt;
+  delete payload.agent.vg_instructions;
+  payload.agent = stripDeprecatedAgentFields(payload.agent);
   if (!payload.agent.vg_uiEngineFormNotifyConfig || typeof payload.agent.vg_uiEngineFormNotifyConfig !== 'object') {
     payload.agent.vg_uiEngineFormNotifyConfig = { enabled: true };
   } else {
@@ -2961,8 +3025,6 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
             enableNodes: true,
             vg_enableUIEngine: true,
             vg_defaultModel: chatModelId,
-            vg_systemPrompt: systemPromptResolved,
-            vg_instructions: systemPromptResolved,
             nodes: normalizeTemplateAgentNodesForCreate(
               [
                 buildTemplateStartNode(systemPromptResolved, {
@@ -3135,8 +3197,9 @@ const coreTools: Tool[] = [
     name: 'create_agent',
     description:
       'Create a Convocore agent (advanced/raw). Prefer create_agent_from_template for website/branded agents. ' +
-      'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions. ' +
+      'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions (API rejects that field). ' +
       'Default chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna). UI Engine flags optional via vg_enableUIEngine*. ' +
+      'Lead notify: use funnelConfig (AI Funnel + lead scoring + email recipients) — do NOT create custom HTTP webhook tools for sales alerts. ' +
       'Sets nodes[0].kb.enabled for auto RAG — still bake critical facts into systemPrompt.',
     inputSchema: {
       type: 'object',
@@ -3175,6 +3238,7 @@ const coreTools: Tool[] = [
             'Main behavior prompt → written to nodes[0].instructions (enableNodes always true).',
         },
         ...AgentUiEngineInputSchemaProperties,
+        ...FunnelAndLeadsInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
@@ -3194,8 +3258,8 @@ const coreTools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, nodes[0].kb.enabled (auto RAG), nodes[0].toolsIds includes built-in web-search, chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna), standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
-      'CRITICAL: bake scraped ground-truth into systemPrompt — KB alone is not enough. Run 8–12 turn fact/lead/anti-rep tests before declaring done. ' +
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG), nodes[0].toolsIds includes built-in web-search, chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna), standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
+      'CRITICAL: bake scraped ground-truth AND a labeled image catalog (after read_image on real photos) into systemPrompt — KB alone is not enough. Pass ownerNotifyEmails so the funnel can email sales. Do NOT invent HTTP notify-sales webhooks. Run 8–12 turn tests before declaring done. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
       type: 'object',
@@ -3204,7 +3268,7 @@ const coreTools: Tool[] = [
         description: { type: 'string', description: 'Short description' },
         systemPrompt: {
           type: 'string',
-          description: 'Main chat / node instructions (nodes[0] + vg_systemPrompt + vg_instructions).',
+          description: 'Main chat / node instructions → nodes[0].instructions only. Do not send vg_instructions.',
         },
         voicePrompt: {
           type: 'string',
@@ -3265,6 +3329,13 @@ const coreTools: Tool[] = [
           type: 'boolean',
           description: 'If true with sourceUrl, attach URL KB after create (errors are non-fatal).',
         },
+        ownerNotifyEmails: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Sales/owner emails. Used for form notify AND funnelConfig.notificationRules. Required for email alerts on hot leads. Do NOT create a custom HTTP webhook for this.',
+        },
+        ...FunnelAndLeadsInputSchemaProperties,
         requestId: {
           type: 'string',
           description:
@@ -3300,8 +3371,10 @@ const coreTools: Tool[] = [
     name: 'update_agent',
     description:
       'Update an existing Convocore agent (PATCH). For large prompt edits prefer patch_agent_prompt. ' +
-      'Main prompt: use systemPrompt or nodes[0].instructions — enableNodes is forced true; do not use vg_instructions. ' +
-      'UI Engine: vg_enableUIEngine* + vg_uiEngineChannelConfig. ownerID is read-only.',
+      'Main prompt: use systemPrompt → start node instructions. NEVER send vg_instructions or vg_systemPrompt. ' +
+      'Do NOT pass nodes[] unless you are changing nodes — omit it for title/UI/funnel/model updates. ' +
+      'Partial nodes[] are GET-merged by id; a toolsIds-only start node cannot blank instructions. ' +
+      'Lead notify: funnelConfig (steps + notificationRules.recipients). UI Engine: vg_enableUIEngine* + vg_uiEngineChannelConfig. ownerID is read-only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3343,12 +3416,13 @@ const coreTools: Tool[] = [
             'Replace main prompt → nodes[0].instructions (enableNodes forced true). Prefer patch_agent_prompt for surgical edits.',
         },
         ...AgentUiEngineInputSchemaProperties,
+        ...FunnelAndLeadsInputSchemaProperties,
         voiceConfig: AgentVoiceConfigInputSchema,
         nodes: {
           type: 'array',
           items: AgentNodeInputSchema,
           description:
-            'Full nodes array if replacing nodes. Main prompt MUST be nodes[0].instructions.',
+            'Node patch. MCP merges onto the current graph by node id so partial updates (e.g. toolsIds) cannot blank nodes[0].instructions. Prefer systemPrompt for prompt writes.',
         },
         additionalConfig: {
           type: 'object',
@@ -3362,13 +3436,12 @@ const coreTools: Tool[] = [
   {
     name: 'patch_agent_prompt',
     description:
-      'Performs string replacements in an agent prompt or related text field — same idea as Cursor StrReplace for files. ' +
+      'Performs string replacements in the start-node prompt (or proactiveMessage / customCSS). ' +
       'USE THIS instead of update_agent when the prompt is large and you only need to change a specific section. ' +
-      'Workflow: get_agent (or prior context) → copy the span into old_string (include enough surrounding lines so it is unique) → new_string is the replacement → this tool patches and PATCHes the agent. ' +
-      'Prefer an exact copy from get_agent; if whitespace/line endings differ slightly the tool falls back to tolerant matching. Prefer this over rewriting the whole instructions blob. ' +
-      'Only use replace_all=true when you intentionally want every occurrence changed. ' +
-      'target=auto picks nodes[0].instructions when enableNodes/nodes exist, otherwise vg_instructions. ' +
-      'By default also syncs the same replace onto the other main-prompt mirrors (nodes[0].instructions / vg_instructions / vg_systemPrompt) when they contain old_string.',
+      'If get_agent returns empty instructions, this tool REFUSES a surgical patch — it will NOT replace the whole prompt with new_string. ' +
+      'Workflow: get_agent → copy the exact span into old_string → new_string is the replacement. ' +
+      'Only omit old_string when the field is truly empty and new_string is the FULL prompt. ' +
+      'target=auto patches the start node instructions. Never writes vg_instructions (API rejects it). sync_mirrors defaults false.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3379,7 +3452,7 @@ const coreTools: Tool[] = [
         old_string: {
           type: 'string',
           description:
-            'Text to find. Prefer an exact copy from get_agent; minor whitespace/line-ending drift is tolerated. Include surrounding context so the match is unique unless replace_all is true.',
+            'Text to find. Copy from get_agent. If the field is empty, this tool refuses a surgical patch — only omit old_string when installing a FULL prompt.',
         },
         new_string: {
           type: 'string',
@@ -3395,15 +3468,15 @@ const coreTools: Tool[] = [
           type: 'string',
           enum: ['auto', 'nodes0', 'vg_instructions', 'vg_systemPrompt', 'proactiveMessage', 'customCSS'],
           description:
-            'Field to patch. auto (default) = nodes[0].instructions when present, else vg_instructions. customCSS patches widget CSS surgically.',
+            'Field to patch. auto / vg_instructions / vg_systemPrompt all write nodes[0].instructions. customCSS patches widget CSS surgically.',
         },
         sync_mirrors: {
           type: 'boolean',
           description:
-            'When patching a main prompt field, also apply the same exact replace to the other main mirrors if they contain old_string (default true). Ignored for proactiveMessage/customCSS.',
+            'When true, also apply the same replace to other writable prompt copies. Default false. vg_instructions / vg_systemPrompt are never written.',
         },
       },
-      required: ['agentId', 'old_string', 'new_string'],
+      required: ['agentId', 'new_string'],
     },
   },
   {
@@ -4266,7 +4339,7 @@ const coreTools: Tool[] = [
     description:
       'Validate and/or scrape HTTP(S) URLs. ' +
       'DEFAULT mode=check: fast ping of one or many links/images (up to 20) — returns status (200/301/404/etc), ok, content-type, final URL after redirects. Use this to verify widget images, logos, CDN assets, booking links, or any URL before putting it on an agent. ' +
-      'mode=scrape: full Convocore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon when building branded agents. Default useProxy=false (~1 credit). ' +
+      'mode=scrape: full Convocore crawler scrape of ONE page (waits up to ~120s) for text/colours/favicon/images when building branded agents. After scrape, CHECK image URLs then call read_image on every important photo so you know what each picture is before putting it in the agent prompt. Default useProxy=false (~1 credit). ' +
       'CRITICAL — proxy: ONLY if a normal (useProxy=false) scrape fails/blocks AND the user explicitly confirms. Proxy is MUCH more expensive (~60 credits/page) and CONSUMES Convocore workspace credits. Requires useProxy=true + confirmExpensiveProxy=true. Never enable proxy proactively. ' +
       'Do NOT use scrape for KB ingest (use create_kb_from_urls). Workspace is resolved internally — never pass workspaceId.',
     inputSchema: {
@@ -4473,7 +4546,7 @@ const coreTools: Tool[] = [
   {
     name: 'read_image',
     description:
-      "Load an image (PNG / JPEG / WebP / GIF / SVG / TIFF / BMP / HEIC) from path / url / base64 and return it as a vision-ready MCP image content block. Auto-normalizes: rasterizes SVG, downscales anything larger than maxDimension (default 2048px), and re-encodes to PNG (or JPEG when needed for size). Vision-capable hosts (Claude Desktop, Claude Code, GPT clients) will see the image natively. Use this for screenshots of bugs, widget previews, mockups, diagrams, scanned receipts, etc.",
+      "Load an image (PNG / JPEG / WebP / GIF / SVG / TIFF / BMP / HEIC) from path / url / base64 and return it as a vision-ready MCP image content block so YOU can see the pixels. REQUIRED after scraping a website: call this with url= on every high-value product/room/treatment/team photo, then write what you saw + the exact URL into the agent systemPrompt catalog. Do not skip this and dump unlabeled URLs. Auto-normalizes: rasterizes SVG, downscales anything larger than maxDimension (default 2048px), and re-encodes to PNG (or JPEG when needed for size).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -5159,10 +5232,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const validated = CreateAgentSchema.parse(args);
         const { additionalConfig, ...agentFields } = validated;
         const payload = {
-          agent: normalizeNodesEnabledAgentPayload({
-            ...agentFields,
-            ...(additionalConfig || {}),
-          }) as any,
+          agent: stripDeprecatedAgentFields(
+            normalizeNodesEnabledAgentPayload({
+              ...agentFields,
+              ...(additionalConfig || {}),
+            }) as any
+          ),
         };
 
         const result = await getActiveClient().createAgent(payload);
@@ -5260,12 +5335,73 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'update_agent': {
         const validated = UpdateAgentSchema.parse(args);
         const { agentId, additionalConfig, ...updateFields } = validated;
+        const existing = unwrapAgentRecord(await getActiveClient().getAgent(agentId));
+        const existingId =
+          typeof existing.ID === 'string'
+            ? existing.ID
+            : typeof existing.id === 'string'
+              ? existing.id
+              : '';
+        if (!existingId) {
+          throw new Error(
+            `get_agent(${agentId}) did not return an agent record. Refusing update_agent so we do not PATCH an empty skeleton and wipe the live prompt/nodes.`
+          );
+        }
+
+        const mergedFields: Record<string, unknown> = {
+          ...updateFields,
+          ...(additionalConfig || {}),
+        };
+        if (typeof mergedFields.systemPrompt === 'string' && !String(mergedFields.systemPrompt).trim()) {
+          delete mergedFields.systemPrompt;
+        }
+
+        const nestedMergeKeys = [
+          'voiceConfig',
+          'funnelConfig',
+          'leadCollectionRules',
+          'vg_uiEngineChannelConfig',
+          'vg_uiEngineFormNotifyConfig',
+          'vg_uiEngineInvoiceConfig',
+          'vg_uiEngineCalendarConfig',
+        ] as const;
+        for (const key of nestedMergeKeys) {
+          if (isPlainRecord(mergedFields[key]) && isPlainRecord(existing[key])) {
+            mergedFields[key] = mergeDeep(
+              existing[key] as Record<string, unknown>,
+              mergedFields[key] as Record<string, unknown>
+            );
+          }
+        }
+
+        const systemPrompt =
+          typeof mergedFields.systemPrompt === 'string' &&
+          mergedFields.systemPrompt.trim().length > 0
+            ? String(mergedFields.systemPrompt).trim()
+            : undefined;
+        const liveNodes = Array.isArray(existing.nodes) ? existing.nodes : [];
+        if (Array.isArray(mergedFields.nodes)) {
+          if (liveNodes.length === 0 && existing.enableNodes === true) {
+            throw new Error(
+              `get_agent(${agentId}) returned enableNodes=true but no nodes[]. Refusing to PATCH nodes — that would replace the live graph. Retry get_agent.`
+            );
+          }
+          mergedFields.nodes = mergeAgentNodesForUpdate(existing.nodes, mergedFields.nodes);
+        } else if (systemPrompt) {
+          if (liveNodes.length === 0 && existing.enableNodes === true) {
+            throw new Error(
+              `get_agent(${agentId}) returned no nodes[]. Refusing systemPrompt update that would create a new start node and wipe the live graph.`
+            );
+          }
+          mergedFields.nodes = applySystemPromptToExistingNodes(existing.nodes, systemPrompt);
+        }
+        delete mergedFields.ownerID;
+        delete mergedFields.ownerId;
 
         const payload = {
-          agent: normalizeNodesEnabledAgentPayload({
-            ...updateFields,
-            ...(additionalConfig || {}),
-          }) as any,
+          agent: stripDeprecatedAgentFields(
+            normalizeNodesEnabledAgentPayload(mergedFields, { mode: 'update' }) as any
+          ),
         };
 
         const result = await getActiveClient().updateAgent(agentId, payload);
@@ -5283,11 +5419,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const validated = PatchAgentPromptSchema.parse(args);
         const result = await patchAgentPromptExact({
           agentId: validated.agentId,
-          old_string: validated.old_string,
+          old_string: validated.old_string ?? '',
           new_string: validated.new_string,
           replace_all: validated.replace_all ?? false,
           target: validated.target ?? 'auto',
-          sync_mirrors: validated.sync_mirrors ?? true,
+          sync_mirrors: validated.sync_mirrors ?? false,
         });
         return {
           content: [

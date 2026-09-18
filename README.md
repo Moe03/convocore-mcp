@@ -350,7 +350,9 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 
 **`update_agent`** — Required: `agentId`. Optional: same agent fields as create; patch semantics depend on API. To change the main prompt, update **`nodes[0].instructions`**. For large prompts prefer **`patch_agent_prompt`**.
 
-**`patch_agent_prompt`** — Cursor-style surgical edit. Required: `agentId`, `old_string`, `new_string`. Optional: `replace_all`, `target` (`auto`|`nodes0`|`vg_instructions`|`vg_systemPrompt`|`proactiveMessage`|`customCSS`), `sync_mirrors` (default true). Fails if `old_string` is missing or ambiguous (unless `replace_all`).
+**`patch_agent_prompt`** — Cursor-style surgical edit. Required: `agentId`, `old_string`, `new_string`. Optional: `replace_all`, `target` (`auto`|`nodes0`|`vg_instructions`|`vg_systemPrompt`|`proactiveMessage`|`customCSS` — vg_* still writes `nodes[0].instructions`), `sync_mirrors` (default **false**; never PATCHes `vg_instructions`). Fails if `old_string` is missing or ambiguous (unless `replace_all`).
+
+**AI Funnel / lead scoring** — `funnelConfig` + `leadCollectionRules` on create/update, or `ownerNotifyEmails` on `create_agent_from_template`. Runtime emails sales on hot leads. Do **not** attach a custom HTTP “notify sales” webhook tool.
 
 **`delete_agent`** — Required: `agentId`. Permanent deletion on the API side.
 
