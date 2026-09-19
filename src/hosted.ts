@@ -38,6 +38,7 @@ import {
   sanitizeWorkspaceName,
 } from './mcp-display-name.js';
 import { PACKAGE_VERSION } from './package-meta.js';
+import { pickForwardedApiHeaders } from './forwarded-api-headers.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -189,6 +190,8 @@ function applyCors(req: IncomingMessage, res: ServerResponse): void {
       'MCP-Protocol-Version',
       'Last-Event-ID',
       'X-Convocore-Region',
+      'X-VG-Ai-Wizard',
+      'X-VG-Workspace-Id',
     ].join(', ')
   );
   res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
@@ -242,9 +245,10 @@ async function destroySession(sessionId: string): Promise<void> {
 async function createSession(
   workspaceSecret: string,
   apiRegion?: 'eu-gcp' | 'na-gcp',
-  displayHints?: { workspaceName?: string; displayName?: string }
+  displayHints?: { workspaceName?: string; displayName?: string },
+  extraApiHeaders?: Record<string, string>
 ): Promise<SessionRecord> {
-  const config = buildConfig({ workspaceSecret, apiRegion });
+  const config = buildConfig({ workspaceSecret, apiRegion, extraApiHeaders });
   const context = createRequestContext(config);
 
   let record!: SessionRecord;
@@ -314,6 +318,15 @@ async function resolveSession(
     }
 
     existing.lastSeenAt = Date.now();
+    const forwarded = pickForwardedApiHeaders(req);
+    if (Object.keys(forwarded).length > 0) {
+      const merged = {
+        ...(existing.context.config.extraApiHeaders || {}),
+        ...forwarded,
+      };
+      existing.context.config.extraApiHeaders = merged;
+      existing.context.client.setExtraApiHeaders(merged);
+    }
     return existing;
   }
 
@@ -341,7 +354,12 @@ async function resolveSession(
     return null;
   }
 
-  return createSession(secret, parseApiRegion(req), parseDisplayHints(req));
+  return createSession(
+    secret,
+    parseApiRegion(req),
+    parseDisplayHints(req),
+    pickForwardedApiHeaders(req)
+  );
 }
 
 function parseDisplayHints(req: IncomingMessage): {

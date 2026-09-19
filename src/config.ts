@@ -10,6 +10,7 @@ export type ConvocoreConfigOptions = {
   baseUrl?: string;
   interactWsUrl?: string;
   workspaceId?: string;
+  extraApiHeaders?: Record<string, string>;
 };
 
 export function buildConfig(options: ConvocoreConfigOptions): ConvocoreConfig {
@@ -36,6 +37,7 @@ export function buildConfig(options: ConvocoreConfigOptions): ConvocoreConfig {
     baseUrl,
     interactWsUrl: interactWsUrlOverride || undefined,
     workspaceId,
+    extraApiHeaders: options.extraApiHeaders,
   };
 }
 

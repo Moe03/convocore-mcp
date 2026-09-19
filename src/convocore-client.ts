@@ -207,6 +207,14 @@ export class ConvocoreClient {
     this.config = config;
   }
 
+  setExtraApiHeaders(headers: Record<string, string>): void {
+    this.config.extraApiHeaders = { ...headers };
+  }
+
+  private extraApiHeaders(): Record<string, string> {
+    return this.config.extraApiHeaders || {};
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -217,6 +225,7 @@ export class ConvocoreClient {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.config.workspaceSecret}`,
       'Content-Type': 'application/json',
+      ...this.extraApiHeaders(),
       ...((options.headers as Record<string, string>) || {}),
     };
 
@@ -1449,6 +1458,7 @@ export class ConvocoreClient {
         ws = new WebSocket(url, {
           headers: {
             Authorization: `Bearer ${this.config.workspaceSecret}`,
+            ...this.extraApiHeaders(),
           },
         });
       } catch (err) {

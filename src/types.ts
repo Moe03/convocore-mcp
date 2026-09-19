@@ -18,6 +18,11 @@ export interface ConvocoreConfig {
    * while keeping REST traffic on prod.
    */
   interactWsUrl?: string;
+  /**
+   * Allowlisted headers copied from the hosted MCP client (AI Wizard passport).
+   * Never includes Authorization. Cursor / stdio leave this empty.
+   */
+  extraApiHeaders?: Record<string, string>;
 }
 
 export interface VoiceConfig {
