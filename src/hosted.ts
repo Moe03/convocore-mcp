@@ -3,7 +3,7 @@
 /**
  * Convocore MCP — hosted Streamable HTTP transport
  *
- * Deploy behind HTTPS (e.g. https://mcp.convocore.ai/mcp). Clients authenticate with:
+ * Deploy behind HTTPS (https://mcp.convocore.ai/mcp and https://mcp.convocore.app/mcp). Clients authenticate with:
  *   Authorization: Bearer <WORKSPACE_SECRET>
  *   or (Claude connectors) ?token=<WORKSPACE_SECRET> on the MCP URL
  *   or x-api-key / x-auth-token headers
@@ -27,7 +27,7 @@ import {
   runWithRequestContext,
   type RequestContextStore,
 } from './request-context.js';
-import { isMcpPathname } from './connector-url.js';
+import { isMcpPathname, isOfficialMcpHost, OFFICIAL_MCP_HOSTS } from './connector-url.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
 import { handleHostedOAuth, wwwAuthenticateChallenge } from './hosted-oauth.js';
 import { buildInstallLinks, normalizeRegion } from './install-links.js';
@@ -73,10 +73,12 @@ type SessionRecord = {
 
 const sessions = new Map<string, SessionRecord>();
 
-function parseAllowedHosts(): string[] | undefined {
+function parseAllowedHosts(): string[] {
   const raw = process.env.CONVOCORE_HOSTED_ALLOWED_HOSTS?.trim();
-  if (!raw) return undefined;
-  return raw.split(',').map((h) => h.trim()).filter(Boolean);
+  const fromEnv = raw
+    ? raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
+    : [];
+  return [...new Set([...OFFICIAL_MCP_HOSTS, ...fromEnv])];
 }
 
 function secretsEqual(a: string, b: string): boolean {

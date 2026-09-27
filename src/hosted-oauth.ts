@@ -15,7 +15,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { extractSecretFromConnectorUrl } from './connector-url.js';
+import { extractSecretFromConnectorUrl, isOfficialMcpHost } from './connector-url.js';
 import { formatMcpDisplayName } from './mcp-display-name.js';
 
 const TEN_YEARS_SEC = 10 * 365 * 24 * 60 * 60;
@@ -61,18 +61,29 @@ function pkceS256(verifier: string): string {
   return base64Url(createHash('sha256').update(verifier).digest());
 }
 
+function requestHost(req: IncomingMessage): string {
+  const xfHost = req.headers['x-forwarded-host'];
+  const forwarded = Array.isArray(xfHost) ? xfHost[0] : xfHost;
+  return (
+    forwarded?.split(',')[0]?.trim() ||
+    (typeof req.headers.host === 'string' ? req.headers.host : 'localhost')
+  );
+}
+
 export function publicBaseUrl(req: IncomingMessage): string {
+  const host = requestHost(req);
+  // Keep OAuth issuer on the hostname the client actually used (.ai or .app).
+  if (isOfficialMcpHost(host)) {
+    const bare = host.toLowerCase().split(':')[0];
+    return `https://${bare}`;
+  }
+
   const env = process.env.CONVOCORE_PUBLIC_BASE_URL?.trim().replace(/\/$/, '');
   if (env) return env;
 
   const xfProto = req.headers['x-forwarded-proto'];
   const protoRaw = Array.isArray(xfProto) ? xfProto[0] : xfProto;
   const proto = (protoRaw?.split(',')[0]?.trim() || 'https').replace(/:$/, '');
-  const host =
-    (typeof req.headers['x-forwarded-host'] === 'string'
-      ? req.headers['x-forwarded-host'].split(',')[0]?.trim()
-      : undefined) ||
-    (typeof req.headers.host === 'string' ? req.headers.host : 'localhost');
   return `${proto}://${host}`;
 }
 

@@ -5,6 +5,7 @@ import {
   __pkceS256ForTests,
   __resetHostedOAuthForTests,
   handleHostedOAuth,
+  publicBaseUrl,
 } from '../dist/hosted-oauth.js';
 
 function normalizePath(url) {
@@ -134,5 +135,21 @@ describe('hosted-oauth', () => {
     assert.ok(meta.authorization_endpoint.includes('/oauth/authorize'));
     assert.ok(meta.registration_endpoint.includes('/oauth/register'));
     assert.deepEqual(meta.code_challenge_methods_supported, ['S256']);
+  });
+});
+
+describe('public MCP hosts', () => {
+  it('keeps OAuth issuer on mcp.convocore.app when that host is used', () => {
+    const prev = process.env.CONVOCORE_PUBLIC_BASE_URL;
+    process.env.CONVOCORE_PUBLIC_BASE_URL = 'https://mcp.convocore.ai';
+    try {
+      const url = publicBaseUrl({
+        headers: { 'x-forwarded-host': 'mcp.convocore.app', host: '127.0.0.1' },
+      });
+      assert.equal(url, 'https://mcp.convocore.app');
+    } finally {
+      if (prev === undefined) delete process.env.CONVOCORE_PUBLIC_BASE_URL;
+      else process.env.CONVOCORE_PUBLIC_BASE_URL = prev;
+    }
   });
 });

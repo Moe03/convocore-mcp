@@ -8,6 +8,15 @@
 
 export type ConvocoreRegion = 'eu-gcp' | 'na-gcp';
 
+/** Public MCP hostnames. Both stay live; OAuth issuer follows whichever the client used. */
+export const OFFICIAL_MCP_HOSTS = ['mcp.convocore.ai', 'mcp.convocore.app'] as const;
+
+export function isOfficialMcpHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const bare = host.trim().toLowerCase().split(':')[0] ?? '';
+  return (OFFICIAL_MCP_HOSTS as readonly string[]).includes(bare);
+}
+
 const PATH_TOKEN_RE = /^\/t\/([^/]+)\/mcp\/?$/i;
 
 export function encodePathSecret(secret: string): string {
