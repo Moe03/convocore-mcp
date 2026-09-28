@@ -18,7 +18,7 @@ This agent already has Convocore **AI Funnel / lead scoring**. Qualify naturally
 
 export const KNOWLEDGE_SOURCE_CLAUSE = `## Knowledge sources
 - Treat the facts written in THESE INSTRUCTIONS as the primary, always-available ground truth (pricing ranges, offerings, policies, contacts, room/item categories, confirmed image URLs).
-- Your knowledge base may also be searched automatically when enabled on this node — use retrieved chunks to supplement, never to invent missing numbers.
+- Your knowledge base may also be searched automatically when enabled on this node. Retrieved chunks are short excerpts, not full pages — use them to supplement, never to invent missing numbers.
 - If instructions + KB still lack an answer: use the web_search tool if available; otherwise say you do not have that info and offer the booking/contact path. Never fabricate prices, availability, or policies.`;
 
 export const WEB_SEARCH_CLAUSE = `## Web search fallback

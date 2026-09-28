@@ -127,9 +127,9 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 
 ## CRITICAL — chat model for new agents
 
-- **Default:** \`deepseek-ai/DeepSeek-V4-Flash\` (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`).
-- **Fallback during testing:** if Flash underperforms (broken UI-Engine JSON, ignores instructions, hallucinates), switch to **\`gpt-5.6-luna\`** via \`update_agent\` / \`modelId\` and **tell the user** which model the agent ended on.
-- **Do not** pick legacy models: \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other old defaults.
+- **Default (always):** \`gpt-5.6-luna\` (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`).
+- **Do not** switch new agents to DeepSeek, \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other models unless the user explicitly asks.
+- **Only if Luna is unavailable** on the workspace plan: fall back to \`deepseek-ai/DeepSeek-V4-Flash\` and **tell the user** which model the agent ended on.
 
 ## CRITICAL — scraped images (you must LOOK at them)
 
@@ -150,7 +150,12 @@ If \`read_image\` fails for a URL, drop it. Do not put a broken link on a card.
 
 **Root cause of "KB exists but agent says I don't know":** uploading docs under \`agentId\` is **not** enough by itself. Node agents need **\`nodes[0].kb.enabled: true\`** for automatic retrieval.
 
-MCP now sets this by default on \`create_agent_from_template\` / start nodes (\`enableAutoRag=true\` → \`nodes[0].kb\` with \`maxChunks\`, \`smartSearch\`, \`searchOnStart\`).
+MCP now sets this by default on \`create_agent_from_template\` / start nodes (\`enableAutoRag=true\` → \`nodes[0].kb\` with \`maxChunks=3\`, \`smartSearch\`, \`searchOnStart\`).
+
+**Keep KB chunks small (preferred):**
+- Retrieval: \`nodes[0].kb.maxChunks\` is **3**. Do not raise it unless the user explicitly asks. More chunks flood the model and burn credits.
+- Stored size: \`vgOptions.maxChunkSize\` is **512** characters (platform default is 1024). Do not increase it.
+- When writing manual KB \`content\`, keep each section short (a heading plus a few sentences). Do not dump a whole site into one undifferentiated blob.
 
 **Still mandatory:** bake every critical scraped fact (pricing ranges, offerings, policies, contacts, room/item categories, confirmed image URLs) into **\`systemPrompt\` / \`nodes[0].instructions\`**. KB is a secondary layer. Do not ship an agent whose only copy of ground truth lives in KB docs.
 
@@ -218,7 +223,7 @@ Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that 
 
 ### Phase 3 — Create the agent
 1. Call \`create_agent_from_template\` with: \`title\`, **full \`systemPrompt\`**, \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\`, \`ownerNotifyEmails\` (sales inbox — also wires **funnelConfig** email notify), voice as needed.
- Defaults already enable: \`enableAutoRag\`, forms + form-notify, **funnelConfig + leadCollectionRules**, standard prompt clauses, DeepSeek-V4-Flash.
+ Defaults already enable: \`enableAutoRag\`, forms + form-notify, **funnelConfig + leadCollectionRules**, standard prompt clauses, **gpt-5.6-luna**.
 2. Return \`prototypeUrl\` immediately. Note \`modelIdUsed\` and \`webSearchTool\` from the response.
 3. Do **not** pass \`enableNodes\` / \`vg_instructions\`.
 
@@ -395,7 +400,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - Branding extract (colours/favicon/page text): \`scrape_url\` with \`mode: "scrape"\` + one \`url\`. For KB ingest, always use KB router URL/sitemap tools — not scrape.
 - **Proxy scrapes (expensive):** default is **no proxy** (\`useProxy=false\`, ~1 credit/page). If a normal scrape fails/blocks, **ask the user first** — proxy is ~**60 credits/page** and **consumes Convocore workspace credits**. Only then call with \`useProxy: true\` **and** \`confirmExpensiveProxy: true\`. Never enable proxy by default or without explicit user confirmation.
 - Scraping is **async** — create returns quickly; poll \`list_kb_docs\` / \`get_kb_doc\` for status.
-- **Runtime RAG:** \`nodes[0].kb.enabled=true\` (default on template create). Without it, docs sit unused. Still bake critical facts into the system prompt.
+- **Runtime RAG:** \`nodes[0].kb.enabled=true\` (default on template create) with **\`maxChunks=3\`** and **\`vgOptions.maxChunkSize=512\`**. Prefer these small defaults. Without RAG enabled, docs sit unused. Still bake critical facts into the system prompt.
 - Audits: \`get_kb_docs_bulk\` (max 30). Test chats: \`interact_with_agent\` with \`isTest: true\` — use the **8–12 turn** protocol for new website agents.
 - **Surgical KB edits:** for large docs use \`patch_kb_doc\` instead of full rewrites.
 - **Validate links/images:** \`scrape_url\` mode \`check\`. Then **\`read_image\`** on keepers so you know what each photo is. Branding extract: mode \`scrape\`.

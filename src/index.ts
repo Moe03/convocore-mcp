@@ -39,6 +39,7 @@ import {
   TEMPLATE_START_NODE_DEFAULTS,
   normalizeTemplateStartNodeArray,
   DEFAULT_NODE_KB_CONFIG,
+  applyPreferredKbChunkSize,
 } from './template-start-node.js';
 import { appendStandardPromptSections } from './agent-prompt-standards.js';
 import {
@@ -553,7 +554,7 @@ const CreateAgentFromTemplateSchema = z
       .optional()
       .default(true)
       .describe(
-        'When true (default), sets nodes[0].kb.enabled=true so the runtime auto-retrieves KB chunks into the start node. Still bake critical facts into systemPrompt — do not rely on KB alone.'
+        'When true (default), sets nodes[0].kb.enabled=true so the runtime auto-retrieves a small set of KB chunks (maxChunks=3) into the start node. Stored chunks are capped at 512 characters. Still bake critical facts into systemPrompt — do not rely on KB alone.'
       ),
     appendStandardPromptClauses: z
       .boolean()
@@ -584,7 +585,7 @@ const CreateAgentFromTemplateSchema = z
       .string()
       .optional()
       .describe(
-        'Override chat model. Default deepseek-ai/DeepSeek-V4-Flash. Use gpt-5.6-luna if Flash underperforms during testing.'
+        'Override chat model. Default is always gpt-5.6-luna. Omit this unless the user explicitly wants a different model.'
       ),
     requestId: z
       .string()
@@ -1829,6 +1830,10 @@ function normalizeNodesEnabledAgentPayload(
   } else {
     out.enableNodes = true;
     if (nodes) out.nodes = nodes;
+    if (typeof out.vg_defaultModel !== 'string' || !out.vg_defaultModel.trim()) {
+      out.vg_defaultModel = DEFAULT_MODEL_FOR_TEMPLATE_AGENTS;
+    }
+    applyPreferredKbChunkSize(out);
   }
   // Do NOT set vg_instructions / vg_systemPrompt — current Convocore API rejects them as unknown top-level fields.
   return stripDeprecatedAgentFields(out);
@@ -2960,6 +2965,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   payload.agent.vg_enableUIEngine = true;
   payload.agent.vg_enableUIEngineForms = true;
   payload.agent.vg_defaultModel = chatModelId;
+  applyPreferredKbChunkSize(payload.agent);
   delete payload.agent.vg_systemPrompt;
   delete payload.agent.vg_instructions;
   payload.agent = stripDeprecatedAgentFields(payload.agent);
@@ -3198,9 +3204,9 @@ const coreTools: Tool[] = [
     description:
       'Create a Convocore agent (advanced/raw). Prefer create_agent_from_template for website/branded agents. ' +
       'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions (API rejects that field). ' +
-      'Default chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna). UI Engine flags optional via vg_enableUIEngine*. ' +
+      'Default chat model is always gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). UI Engine flags optional via vg_enableUIEngine*. ' +
       'Lead notify: use funnelConfig (AI Funnel + lead scoring + email recipients) — do NOT create custom HTTP webhook tools for sales alerts. ' +
-      'Sets nodes[0].kb.enabled for auto RAG — still bake critical facts into systemPrompt.',
+      'Sets nodes[0].kb.enabled for auto RAG with maxChunks=3 and vgOptions.maxChunkSize=512 — still bake critical facts into systemPrompt. Do not raise chunk size or chunk count unless the user asks.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -3258,7 +3264,7 @@ const coreTools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG), nodes[0].toolsIds includes built-in web-search, chat model deepseek-ai/DeepSeek-V4-Flash (fallback gpt-5.6-luna), standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG, maxChunks=3, vgOptions.maxChunkSize=512), nodes[0].toolsIds includes built-in web-search, chat model always gpt-5.6-luna, standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
       'CRITICAL: bake scraped ground-truth AND a labeled image catalog (after read_image on real photos) into systemPrompt — KB alone is not enough. Pass ownerNotifyEmails so the funnel can email sales. Do NOT invent HTTP notify-sales webhooks. Run 8–12 turn tests before declaring done. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
@@ -6601,7 +6607,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               notes: [
                 'Prices are USD per 1,000,000 tokens (input / output).',
                 'Each interaction also charges 1 base credit ($0.001) on top of token cost.',
-                'New agents should use deepseek-ai/DeepSeek-V4-Flash (then gpt-5.6-luna). Avoid gpt-4o / legacy defaults.',
+                'New agents always use gpt-5.6-luna. Use deepseek-ai/DeepSeek-V4-Flash only if Luna is unavailable. Avoid gpt-4o / legacy defaults.',
                 'Higher plans include every lower model tier.',
               ],
             };

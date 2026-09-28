@@ -1,9 +1,9 @@
 import { DEFAULT_TEMPLATE_NODE_TOOL_IDS, mergeNodeToolsIds } from './builtin-system-tools.js';
 
 /** Default chat model for every new agent. */
-export const RECOMMENDED_CHAT_MODEL_ID = 'deepseek-ai/DeepSeek-V4-Flash';
-/** Fallback if DeepSeek V4 Flash underperforms or is unavailable — GPT-5.6 Luna. */
-export const FALLBACK_CHAT_MODEL_ID = 'gpt-5.6-luna';
+export const RECOMMENDED_CHAT_MODEL_ID = 'gpt-5.6-luna';
+/** Cheaper backup only if GPT-5.6 Luna is unavailable on the workspace plan. */
+export const FALLBACK_CHAT_MODEL_ID = 'deepseek-ai/DeepSeek-V4-Flash';
 
 const LEGACY_CHAT_MODEL_IDS = new Set([
   'gpt-4o',
@@ -24,14 +24,38 @@ export function isLegacyChatModelId(modelId: string | undefined): boolean {
   return id.includes('gpt-4o') || id.includes('glm-4') || id.includes('glm-5');
 }
 
+/**
+ * How many KB chunks a turn may retrieve.
+ * Convocore recommends 3–4; keep this at the low end so context stays small.
+ */
+export const PREFERRED_KB_MAX_CHUNKS = 3;
+/**
+ * Max characters per stored KB chunk (`vgOptions.maxChunkSize`).
+ * Platform default is 1024; prefer a shorter chunk so retrieval stays focused.
+ */
+export const PREFERRED_KB_CHUNK_CHARS = 512;
+
 /** OpenAPI nodes[].kb — enables automatic KB retrieval on the start node. */
 export const DEFAULT_NODE_KB_CONFIG = {
   enabled: true,
-  maxChunks: 8,
+  maxChunks: PREFERRED_KB_MAX_CHUNKS,
   maxQueries: 3,
   smartSearch: true,
   searchOnStart: true,
 } as const;
+
+/** Cap stored chunk size. A missing or oversized value is pulled down to the preferred size. */
+export function applyPreferredKbChunkSize(agent: Record<string, unknown>): void {
+  const existing =
+    typeof agent.vgOptions === 'object' && agent.vgOptions !== null && !Array.isArray(agent.vgOptions)
+      ? { ...(agent.vgOptions as Record<string, unknown>) }
+      : {};
+  const size = existing.maxChunkSize;
+  if (typeof size !== 'number' || !Number.isFinite(size) || size > PREFERRED_KB_CHUNK_CHARS) {
+    existing.maxChunkSize = PREFERRED_KB_CHUNK_CHARS;
+  }
+  agent.vgOptions = existing;
+}
 
 export const TEMPLATE_START_NODE_DEFAULTS = {
   id: '__start__',
@@ -168,7 +192,7 @@ export function normalizeTemplateStartNodeArray(
     kb.enabled = DEFAULT_NODE_KB_CONFIG.enabled;
     patchedFields.push('kb.enabled');
   }
-  if (!isFiniteNumber(kb.maxChunks)) {
+  if (!isFiniteNumber(kb.maxChunks) || kb.maxChunks > DEFAULT_NODE_KB_CONFIG.maxChunks) {
     kb.maxChunks = DEFAULT_NODE_KB_CONFIG.maxChunks;
     patchedFields.push('kb.maxChunks');
   }

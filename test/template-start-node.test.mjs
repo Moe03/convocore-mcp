@@ -32,7 +32,7 @@ test('normalizes a start node missing type to type:start without dropping existi
     maxTokens: 1500,
   });
   assert.equal(startNode.kb.enabled, true);
-  assert.equal(startNode.kb.maxChunks, 8);
+  assert.equal(startNode.kb.maxChunks, 3);
   assert.ok(startNode.toolsIds.includes('web-search'));
   assert.ok(result.patchedFields.includes('type'));
   assert.ok(result.patchedFields.includes('kb.enabled'));

@@ -11,14 +11,14 @@ import { PRICING } from '../dist/pricing.js';
 import { appendStandardPromptSections } from '../dist/agent-prompt-standards.js';
 
 describe('recommended chat model', () => {
-  it('defaults new start nodes to DeepSeek-V4-Flash with kb + web-search', () => {
-    assert.equal(RECOMMENDED_CHAT_MODEL_ID, 'deepseek-ai/DeepSeek-V4-Flash');
-    assert.equal(FALLBACK_CHAT_MODEL_ID, 'gpt-5.6-luna');
-    assert.equal(TEMPLATE_START_NODE_DEFAULTS.llmConfig.modelId, 'deepseek-ai/DeepSeek-V4-Flash');
+  it('defaults new start nodes to gpt-5.6-luna with kb + web-search', () => {
+    assert.equal(RECOMMENDED_CHAT_MODEL_ID, 'gpt-5.6-luna');
+    assert.equal(FALLBACK_CHAT_MODEL_ID, 'deepseek-ai/DeepSeek-V4-Flash');
+    assert.equal(TEMPLATE_START_NODE_DEFAULTS.llmConfig.modelId, 'gpt-5.6-luna');
     const created = normalizeTemplateStartNodeArray([]);
-    assert.equal(created.nodes[0].llmConfig.modelId, 'deepseek-ai/DeepSeek-V4-Flash');
+    assert.equal(created.nodes[0].llmConfig.modelId, 'gpt-5.6-luna');
     assert.equal(created.nodes[0].kb.enabled, true);
-    assert.equal(created.nodes[0].kb.maxChunks, 8);
+    assert.equal(created.nodes[0].kb.maxChunks, 3);
     assert.ok(created.nodes[0].toolsIds.includes('web-search'));
   });
 
