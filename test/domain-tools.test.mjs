@@ -33,6 +33,9 @@ const EXPECTED_DOMAIN_TOOLS = [
   'bulk_create_kb_docs',
   'create_kb_image',
   'get_kb_quota',
+  'get_whatsapp_ai_rules',
+  'update_whatsapp_ai_rules',
+  'update_whatsapp_number_settings',
   'search_mcp_tools',
 ];
 

@@ -429,6 +429,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"List agents / convos / KB / leads / orgs / clients"** → matching list tool with **\`mode=compact\`** (default). Escalate to \`full\` or \`get_*\` only when needed.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (compact + cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
+- **"When should the AI reply on WhatsApp / ignore some chats / only reply to X / reply only in working hours / pause the WhatsApp bot"** → \`get_whatsapp_ai_rules\` → \`update_whatsapp_ai_rules\` (phrases, AI rule, schedule, allow/deny list) or \`update_whatsapp_number_settings\` (\`aiPaused\`, coexistence). Not a prompt change.
 - **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create. Then re-set \`funnelConfig.notificationRules.recipients\` (clones do not inherit them).
 - **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\` (list actions: compact). Mutate with \`*_write\`.
 - **"CRM leads"** → \`leads_read\` / \`leads_write\` (list: compact).

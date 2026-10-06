@@ -164,6 +164,24 @@ export const CHANNEL_INTEGRATION_SPEC = {
       productionGuard:
         'The current backend blocks setWaNumberVoiceCalling(enabled=true) when NODE_ENV === "production".',
     },
+    currentMcpTools: [
+      'get_whatsapp_ai_rules(agentId) - agent AI rules (inboundEngagement) + assigned numbers and their AI settings.',
+      'update_whatsapp_ai_rules(agentId, rules) - partial update of the AI rules.',
+      'update_whatsapp_number_settings(agentId, phoneId, settings) - aiPaused, legacy guards, coexistenceSettings.',
+    ],
+    aiRules: {
+      canonicalLocation: 'voiceglow/{agentId}.inboundEngagement',
+      note:
+        'Current reply-decision system. When enabled it replaces the legacy per-number newContactsOnly / aiReplyRule guards; aiPaused still wins over everything.',
+      decisionOrder: [
+        'aiPaused / human-chatting → no reply',
+        'availability schedule',
+        'participantList allow/deny (skipped for always_reply_regardless)',
+        'thread already owned by AI + afterOwnershipMode=always_reply → reply',
+        'triggerPhrases match → reply',
+        'aiRule LLM decision',
+      ],
+    },
     recommendedTools: [
       'listWorkspaceWhatsAppNumbers(workspaceId) - return safe metadata, mask longAccessToken.',
       'getWhatsAppNumber(phoneId) - return safe config for one number, mask credentials by default.',

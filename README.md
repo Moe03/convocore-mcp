@@ -33,6 +33,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Leads CRM | 2 | `leads_read` / `leads_write` (list, export, import, magic import, …) |
 | Agent HTTP tools | 5 | list/get/create/update/delete Convocore agent tools (not MCP tools) |
 | Agent variables | 5 | list/get/create/update/delete agent variables |
+| WhatsApp AI rules | 3 | `get_whatsapp_ai_rules`, `update_whatsapp_ai_rules`, `update_whatsapp_number_settings` — when the AI replies on WhatsApp |
 | Testing | 3 | `test_agent_tool`, `test_agent_tool_request`, `run_agent_auto_test` |
 | Discovery | 1 | `search_mcp_tools` — find the right tool without guessing |
 | Scrape / embed / voice | many | scrape, embed code, voices, Twilio utils |

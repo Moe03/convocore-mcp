@@ -1922,6 +1922,30 @@ export class ConvocoreClient {
     });
   }
 
+  // ─── WhatsApp AI rules ──────────────────────────────────────────────────────
+
+  async getWhatsappAiRules(agentId: string): Promise<any> {
+    return this.request<any>(`/agents/${encodeURIComponent(agentId)}/whatsapp/ai-rules`);
+  }
+
+  async updateWhatsappAiRules(agentId: string, rules: Record<string, unknown>): Promise<any> {
+    return this.request<any>(`/agents/${encodeURIComponent(agentId)}/whatsapp/ai-rules`, {
+      method: 'PATCH',
+      body: JSON.stringify({ inboundEngagement: rules }),
+    });
+  }
+
+  async updateWhatsappNumberSettings(
+    agentId: string,
+    phoneId: string,
+    settings: Record<string, unknown>
+  ): Promise<any> {
+    return this.request<any>(
+      `/agents/${encodeURIComponent(agentId)}/whatsapp/numbers/${encodeURIComponent(phoneId)}/settings`,
+      { method: 'PATCH', body: JSON.stringify(settings) }
+    );
+  }
+
   async listAgentVariables(agentId: string): Promise<any> {
     return this.request(`/agents/${encodeURIComponent(agentId)}/variables`);
   }

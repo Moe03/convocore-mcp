@@ -14,6 +14,7 @@ import { kbExtrasModule } from './kb-extras.js';
 import { leadsModule } from './leads.js';
 import { orgsModule } from './orgs.js';
 import { testingModule } from './testing.js';
+import { whatsappModule } from './whatsapp.js';
 
 const BASE_MODULES: ToolModule[] = [
   orgsModule,
@@ -25,6 +26,7 @@ const BASE_MODULES: ToolModule[] = [
   testingModule,
   cloneSendModule,
   kbExtrasModule,
+  whatsappModule,
 ];
 
 function mergeModules(modules: ToolModule[]): {
