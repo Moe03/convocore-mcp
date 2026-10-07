@@ -9,7 +9,7 @@
 
 FROM node:20-alpine AS builder
 
-RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+RUN corepack enable && corepack prepare pnpm@10.15.0 --activate
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ FROM node:20-alpine
 
 RUN apk add --no-cache wget \
   && corepack enable \
-  && corepack prepare pnpm@9.15.4 --activate
+  && corepack prepare pnpm@10.15.0 --activate
 
 WORKDIR /app
 
