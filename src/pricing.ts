@@ -71,7 +71,7 @@ export const PRICING: PricingSnapshot = {
     notes: [
       'Prices are approximate and subject to change — always link users to https://convocore.ai/pricing for current numbers.',
       'Every AI interaction costs 1 base credit ($0.001) PLUS LLM token usage based on the chosen model.',
-      'New agents always use gpt-5.6-luna. Use deepseek-ai/DeepSeek-V4-Flash only if Luna is unavailable on the workspace plan. Do not default to gpt-4o or other legacy models.',
+      'New agents always use claude-haiku-4-5-20251001 (Claude Haiku 4.5). Use deepseek-ai/DeepSeek-V4-Flash only if Haiku is unavailable on the workspace plan. Do not default to gpt-5.6-luna, gpt-4o, or other models.',
       'Higher plans include every lower model tier (Business+ unlocks Tiers 1–4).',
       'Unused monthly credits do not roll over.',
     ],
@@ -91,13 +91,13 @@ export const PRICING: PricingSnapshot = {
     {
       name: 'Starter',
       price: '$29/mo',
-      tagline: 'Unlocks Tier 3+ (includes Gemini 3.1 Flash-Lite). 5,000 credits / mo.',
+      tagline: 'Unlocks Tier 3+ including Claude Haiku 4.5 (recommended default). 5,000 credits / mo.',
       features: ['5,000 monthly credits', 'Tier 3 + Tier 4 models', 'Production support agents'],
     },
     {
       name: 'Pro',
       price: '$59/mo',
-      tagline: 'Unlocks Tier 2+ including GPT-5.6 Luna (recommended default). 15,000 credits / mo.',
+      tagline: 'Unlocks Tier 2+ including GPT-5.6 Luna. 15,000 credits / mo.',
       features: ['15,000 monthly credits', 'Tier 2–4 models', 'GPT-5.6 Luna + thinking models'],
     },
     {
@@ -191,8 +191,8 @@ export const PRICING: PricingSnapshot = {
       max: 300,
       notes: [
         'Web chat / WhatsApp / Instagram / Messenger.',
-        'GPT-5.6 Luna (recommended): ~1.1 cr/msg typical (~2,500 in + 300 out) plus 1 interaction credit.',
-        'Gemini 3.1 Flash-Lite (fallback): ~1.6 cr/msg typical plus 1 interaction credit.',
+        'Claude Haiku 4.5 (recommended default): ~7 cr/msg typical (~2,500 in + 300 out) plus 1 interaction credit.',
+        'Gemini 3.1 Flash-Lite: ~1.6 cr/msg typical plus 1 interaction credit.',
         'Value Tier 4 models: ~0.3–4 cr/msg. Flagship Tier 1: ~6–83 cr/msg.',
         'Actual count depends on conversation length — shorter chats = more messages.',
       ],
@@ -226,19 +226,19 @@ export const PRICING: PricingSnapshot = {
     { model: 'Qwen3.5-397B-A17B', modelId: 'Qwen/Qwen3.5-397B-A17B', provider: 'convocore', inputPerMillion: 0.9, outputPerMillion: 5.4, planTier: 4, unlocksOn: 'Free' },
 
     // Tier 3 — Starter+
-    { model: 'Gemini 3.1 Flash-Lite', modelId: 'gemini-3.1-flash-lite', provider: 'google', inputPerMillion: 0.375, outputPerMillion: 2.25, planTier: 3, unlocksOn: 'Starter+', recommended: true },
+    { model: 'Gemini 3.1 Flash-Lite', modelId: 'gemini-3.1-flash-lite', provider: 'google', inputPerMillion: 0.375, outputPerMillion: 2.25, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'GPT 5 Mini', modelId: 'gpt-5-mini-2025-08-07', provider: 'openai', inputPerMillion: 0.375, outputPerMillion: 3.0, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Qwen-Max 72B', modelId: 'qwen-max-latest', provider: 'alibaba', inputPerMillion: 0.6, outputPerMillion: 1.8, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Qwen-Plus Latest', modelId: 'qwen-plus-latest', provider: 'alibaba', inputPerMillion: 0.6, outputPerMillion: 1.8, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'GPT-4.1 Mini', modelId: 'gpt-4.1-mini-2025-04-14', provider: 'openai', inputPerMillion: 0.6, outputPerMillion: 2.4, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Gemini 2.5 Flash', modelId: 'gemini-2.5-flash', provider: 'google', inputPerMillion: 0.45, outputPerMillion: 3.75, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'Kimi-K2.6', modelId: 'moonshotai/Kimi-K2.6', provider: 'convocore', inputPerMillion: 1.43, outputPerMillion: 6.0, planTier: 3, unlocksOn: 'Starter+' },
-    { model: 'Claude Haiku 4.5', modelId: 'claude-haiku-4-5-20251001', provider: 'anthropic', inputPerMillion: 1.5, outputPerMillion: 7.5, planTier: 3, unlocksOn: 'Starter+' },
+    { model: 'Claude Haiku 4.5', modelId: 'claude-haiku-4-5-20251001', provider: 'anthropic', inputPerMillion: 1.5, outputPerMillion: 7.5, planTier: 3, unlocksOn: 'Starter+', recommended: true },
     { model: 'DeepSeek-V4-Flash', modelId: 'deepseek-ai/DeepSeek-V4-Flash', provider: 'convocore', inputPerMillion: 0.14, outputPerMillion: 0.28, planTier: 3, unlocksOn: 'Starter+' },
     { model: 'DeepSeek-V4-Pro', modelId: 'deepseek-ai/DeepSeek-V4-Pro', provider: 'convocore', inputPerMillion: 2.63, outputPerMillion: 5.25, planTier: 3, unlocksOn: 'Starter+' },
 
     // Tier 2 — Pro+
-    { model: 'GPT-5.6 Luna', modelId: 'gpt-5.6-luna', provider: 'openai', inputPerMillion: 0.26, outputPerMillion: 1.56, planTier: 2, unlocksOn: 'Pro+', recommended: true },
+    { model: 'GPT-5.6 Luna', modelId: 'gpt-5.6-luna', provider: 'openai', inputPerMillion: 0.26, outputPerMillion: 1.56, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'GPT-5', modelId: 'gpt-5-2025-08-07', provider: 'openai', inputPerMillion: 1.88, outputPerMillion: 15.0, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'Gemini 3.5 Flash', modelId: 'gemini-3.5-flash', provider: 'google', inputPerMillion: 2.25, outputPerMillion: 13.5, planTier: 2, unlocksOn: 'Pro+' },
     { model: 'GPT-4.1', modelId: 'gpt-4.1-2025-04-14', provider: 'openai', inputPerMillion: 3.0, outputPerMillion: 12.0, planTier: 2, unlocksOn: 'Pro+' },

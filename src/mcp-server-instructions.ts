@@ -127,9 +127,9 @@ When the user asks how to deploy, embed, or add their agent to a website (or ask
 
 ## CRITICAL — chat model for new agents
 
-- **Default (always):** \`gpt-5.6-luna\` (\`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`).
-- **Do not** switch new agents to DeepSeek, \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other models unless the user explicitly asks.
-- **Only if Luna is unavailable** on the workspace plan: fall back to \`deepseek-ai/DeepSeek-V4-Flash\` and **tell the user** which model the agent ended on.
+- **Default (always):** \`claude-haiku-4-5-20251001\` (Claude Haiku 4.5) on \`vg_defaultModel\` + \`nodes[0].llmConfig.modelId\`.
+- **Do not** switch new agents to GPT-5.6 Luna, DeepSeek, \`gpt-4o\`, \`gpt-4o-mini\`, GPT-4.1, GLM-5, or other models unless the user explicitly asks.
+- **Only if Haiku 4.5 is unavailable** on the workspace plan: fall back to \`deepseek-ai/DeepSeek-V4-Flash\` and **tell the user** which model the agent ended on.
 
 ## CRITICAL — scraped images (you must LOOK at them)
 
@@ -223,7 +223,7 @@ Draft a **long, detailed** main prompt (becomes \`nodes[0].instructions\`) that 
 
 ### Phase 3 — Create the agent
 1. Call \`create_agent_from_template\` with: \`title\`, **full \`systemPrompt\`**, \`primaryColor\`, \`widgetImageUrl\`, \`sourceUrl\`, \`ownerNotifyEmails\` (sales inbox — also wires **funnelConfig** email notify), voice as needed.
- Defaults already enable: \`enableAutoRag\`, forms + form-notify, **funnelConfig + leadCollectionRules**, standard prompt clauses, **gpt-5.6-luna**.
+ Defaults already enable: \`enableAutoRag\`, forms + form-notify, **funnelConfig + leadCollectionRules**, standard prompt clauses, **Claude Haiku 4.5** (\`claude-haiku-4-5-20251001\`).
 2. Return \`prototypeUrl\` immediately. Note \`modelIdUsed\` and \`webSearchTool\` from the response.
 3. Do **not** pass \`enableNodes\` / \`vg_instructions\`.
 

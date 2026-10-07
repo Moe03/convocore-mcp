@@ -1,8 +1,8 @@
 import { DEFAULT_TEMPLATE_NODE_TOOL_IDS, mergeNodeToolsIds } from './builtin-system-tools.js';
 
 /** Default chat model for every new agent. */
-export const RECOMMENDED_CHAT_MODEL_ID = 'gpt-5.6-luna';
-/** Cheaper backup only if GPT-5.6 Luna is unavailable on the workspace plan. */
+export const RECOMMENDED_CHAT_MODEL_ID = 'claude-haiku-4-5-20251001';
+/** Cheaper backup only if Claude Haiku 4.5 is unavailable on the workspace plan. */
 export const FALLBACK_CHAT_MODEL_ID = 'deepseek-ai/DeepSeek-V4-Flash';
 
 const LEGACY_CHAT_MODEL_IDS = new Set([

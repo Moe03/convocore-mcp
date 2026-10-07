@@ -11,12 +11,12 @@ import { PRICING } from '../dist/pricing.js';
 import { appendStandardPromptSections } from '../dist/agent-prompt-standards.js';
 
 describe('recommended chat model', () => {
-  it('defaults new start nodes to gpt-5.6-luna with kb + web-search', () => {
-    assert.equal(RECOMMENDED_CHAT_MODEL_ID, 'gpt-5.6-luna');
+  it('defaults new start nodes to Claude Haiku 4.5 with kb + web-search', () => {
+    assert.equal(RECOMMENDED_CHAT_MODEL_ID, 'claude-haiku-4-5-20251001');
     assert.equal(FALLBACK_CHAT_MODEL_ID, 'deepseek-ai/DeepSeek-V4-Flash');
-    assert.equal(TEMPLATE_START_NODE_DEFAULTS.llmConfig.modelId, 'gpt-5.6-luna');
+    assert.equal(TEMPLATE_START_NODE_DEFAULTS.llmConfig.modelId, 'claude-haiku-4-5-20251001');
     const created = normalizeTemplateStartNodeArray([]);
-    assert.equal(created.nodes[0].llmConfig.modelId, 'gpt-5.6-luna');
+    assert.equal(created.nodes[0].llmConfig.modelId, 'claude-haiku-4-5-20251001');
     assert.equal(created.nodes[0].kb.enabled, true);
     assert.equal(created.nodes[0].kb.maxChunks, 3);
     assert.ok(created.nodes[0].toolsIds.includes('web-search'));
@@ -25,14 +25,14 @@ describe('recommended chat model', () => {
   it('treats gpt-4o family as legacy', () => {
     assert.equal(isLegacyChatModelId('gpt-4o'), true);
     assert.equal(isLegacyChatModelId('gpt-4o-mini'), true);
+    assert.equal(isLegacyChatModelId('claude-haiku-4-5-20251001'), false);
     assert.equal(isLegacyChatModelId('gpt-5.6-luna'), false);
     assert.equal(isLegacyChatModelId('deepseek-ai/DeepSeek-V4-Flash'), false);
   });
 
-  it('includes DeepSeek Flash and Luna in the pricing catalog', () => {
-    const ids = PRICING.models.map((m) => m.modelId);
-    assert.ok(ids.includes('deepseek-ai/DeepSeek-V4-Flash'));
-    assert.ok(ids.includes('gpt-5.6-luna'));
+  it('marks Claude Haiku 4.5 as the only recommended model', () => {
+    const recommended = PRICING.models.filter((m) => m.recommended).map((m) => m.modelId);
+    assert.deepEqual(recommended, ['claude-haiku-4-5-20251001']);
   });
 
   it('appends standard prompt clauses idempotently', () => {

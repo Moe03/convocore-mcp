@@ -592,7 +592,7 @@ const CreateAgentFromTemplateSchema = z
       .string()
       .optional()
       .describe(
-        'Override chat model. Default is always gpt-5.6-luna. Omit this unless the user explicitly wants a different model.'
+        'Override chat model. Default is always claude-haiku-4-5-20251001 (Claude Haiku 4.5). Omit this unless the user explicitly wants a different model.'
       ),
     requestId: z
       .string()
@@ -3224,7 +3224,7 @@ const coreTools: Tool[] = [
     description:
       'Create a Convocore agent (advanced/raw). Prefer create_agent_from_template for website/branded agents. ' +
       'Always node-based: enableNodes is forced true; put the main prompt in systemPrompt (or nodes[0].instructions) — do NOT use vg_instructions (API rejects that field). ' +
-      'Default chat model is always gpt-5.6-luna (vg_defaultModel + nodes[0].llmConfig.modelId). UI Engine flags optional via vg_enableUIEngine*. ' +
+      'Default chat model is always claude-haiku-4-5-20251001 (Claude Haiku 4.5) on vg_defaultModel + nodes[0].llmConfig.modelId. UI Engine flags optional via vg_enableUIEngine*. ' +
       'Lead notify: use funnelConfig (AI Funnel + lead scoring + email recipients) — do NOT create custom HTTP webhook tools for sales alerts. ' +
       'Sets nodes[0].kb.enabled for auto RAG with maxChunks=3 and vgOptions.maxChunkSize=512 — still bake critical facts into systemPrompt. Do not raise chunk size or chunk count unless the user asks.',
     inputSchema: {
@@ -3284,7 +3284,7 @@ const coreTools: Tool[] = [
   {
     name: 'create_agent_from_template',
     description:
-      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG, maxChunks=3, vgOptions.maxChunkSize=512), nodes[0].toolsIds includes built-in web-search, chat model always gpt-5.6-luna, standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
+      'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG, maxChunks=3, vgOptions.maxChunkSize=512), nodes[0].toolsIds includes built-in web-search, chat model always claude-haiku-4-5-20251001 (Claude Haiku 4.5), standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
       'NON-SALES agents (registration, internal, support-only): pass leadCapture=false and appendStandardPromptClauses=false (and attachWebSearchTool=false if it must not browse) so no sales text, funnel or lead forms are added. ' +
       'CRITICAL: bake scraped ground-truth AND a labeled image catalog (after read_image on real photos) into systemPrompt — KB alone is not enough. Pass ownerNotifyEmails so the funnel can email sales. Do NOT invent HTTP notify-sales webhooks. Run 8–12 turn tests before declaring done. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
@@ -3382,7 +3382,7 @@ const coreTools: Tool[] = [
         },
         modelId: {
           type: 'string',
-          description: 'Override chat model. Default gpt-5.6-luna; omit unless the user asks for another model.',
+          description: 'Override chat model. Default claude-haiku-4-5-20251001 (Claude Haiku 4.5); omit unless the user asks for another model.',
         },
         ...FunnelAndLeadsInputSchemaProperties,
         requestId: {
@@ -6650,7 +6650,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               notes: [
                 'Prices are USD per 1,000,000 tokens (input / output).',
                 'Each interaction also charges 1 base credit ($0.001) on top of token cost.',
-                'New agents always use gpt-5.6-luna. Use deepseek-ai/DeepSeek-V4-Flash only if Luna is unavailable. Avoid gpt-4o / legacy defaults.',
+                'New agents always use claude-haiku-4-5-20251001 (Claude Haiku 4.5). Use deepseek-ai/DeepSeek-V4-Flash only if Haiku is unavailable. Do not default to gpt-5.6-luna or gpt-4o.',
                 'Higher plans include every lower model tier.',
               ],
             };
