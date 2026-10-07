@@ -1998,13 +1998,8 @@ export class ConvocoreClient {
       headers: Record<string, string>;
       body: unknown;
     };
-    response: {
-      status: number;
-      ok: boolean;
-      headers: Record<string, string>;
-      body: unknown;
-      rawBody: string;
-    };
+    response: unknown;
+    note?: string;
   }> {
     const toolRes = await this.getAgentTool(opts.toolId);
     const tool =
@@ -2018,8 +2013,34 @@ export class ConvocoreClient {
       });
     }
 
-    const method = String((tool as any).method || 'POST').toUpperCase();
-    const serverUrl = String((tool as any).serverUrl || '').trim();
+    // Tools with a custom HTTP spec are replayed by the API exactly as the live runtime
+    // sends them (bodyTemplate, fixed values, env variables). Rebuilding the request here
+    // from fields[] dropped all of that, so the test never matched real conversations.
+    const usesCustomHttpSpec = Boolean((tool as any).httpRequest?.enabled);
+    let legacyNote: string | undefined;
+    if (usesCustomHttpSpec && opts.bodyOverride === undefined) {
+      try {
+        return await this.request<any>(`/tools/${opts.toolId}/test-request`, {
+          method: 'POST',
+          body: JSON.stringify({ args: opts.fieldOverrides || {} }),
+        });
+      } catch (error) {
+        const status = (error as ConvocoreApiRequestError)?.status;
+        if (status !== 404 && status !== 405) throw error;
+        legacyNote =
+          'This API region does not yet expose POST /tools/{toolId}/test-request, so the request was assembled from fields[] only: httpRequest.bodyTemplate, fixed values and environment variables were NOT applied. The live runtime does apply them.';
+      }
+    } else if (usesCustomHttpSpec) {
+      legacyNote =
+        'bodyOverride was sent as-is; the saved httpRequest.bodyTemplate and environment variables were not applied.';
+    }
+
+    const method = String(
+      (tool as any).httpRequest?.method || (tool as any).method || 'POST'
+    ).toUpperCase();
+    const serverUrl = String(
+      (tool as any).serverUrl || (tool as any).httpRequest?.url || ''
+    ).trim();
     if (!serverUrl) {
       throw new ConvocoreApiRequestError({
         message: 'Tool has no serverUrl — cannot run HTTP test request',
@@ -2144,6 +2165,7 @@ export class ConvocoreClient {
         body: parsed,
         rawBody: rawBody.slice(0, 50_000),
       },
+      ...(legacyNote ? { note: legacyNote } : {}),
     };
   }
 

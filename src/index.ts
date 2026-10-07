@@ -570,6 +570,13 @@ const CreateAgentFromTemplateSchema = z
       .describe(
         'When true (default), enables Convocore built-in web-search on nodes[0].toolsIds (platform defaultSystemTools — no SerpAPI key needed).'
       ),
+    leadCapture: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        'When true (default), installs the default lead funnel, lead collection rules and UI Engine lead forms. Set false for non-sales agents (registration bots, internal assistants): no funnel, no lead rules, forms not forced.'
+      ),
     ownerNotifyEmails: z
       .array(z.string().email())
       .max(10)
@@ -2762,6 +2769,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     enableAutoRag,
     appendStandardPromptClauses,
     attachWebSearchTool,
+    leadCapture,
     ownerNotifyEmails,
     funnelConfig: inputFunnelConfig,
     leadCollectionRules: inputLeadCollectionRules,
@@ -2774,6 +2782,7 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   const enableAutoRagResolved = enableAutoRag !== false;
   const appendStandards = appendStandardPromptClauses !== false;
   const attachSearch = attachWebSearchTool !== false;
+  const leadCaptureEnabled = leadCapture !== false;
   const chatModelId =
     typeof modelIdOverride === 'string' && modelIdOverride.trim().length > 0
       ? modelIdOverride.trim()
@@ -2918,13 +2927,17 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     theme: themeType === 'dark' ? 'custom-blue-dark' : 'custom-blue-light',
     enableNodes: true,
     vg_enableUIEngine: true,
-    vg_enableUIEngineForms: true,
-    vg_uiEngineFormNotifyConfig: {
-      enabled: true,
-      ...(ownerNotifyEmails && ownerNotifyEmails.length > 0
-        ? { extraEmails: ownerNotifyEmails }
-        : {}),
-    },
+    ...(leadCaptureEnabled
+      ? {
+          vg_enableUIEngineForms: true,
+          vg_uiEngineFormNotifyConfig: {
+            enabled: true,
+            ...(ownerNotifyEmails && ownerNotifyEmails.length > 0
+              ? { extraEmails: ownerNotifyEmails }
+              : {}),
+          },
+        }
+      : {}),
     vg_defaultModel: chatModelId,
     voiceConfig: resolvedVoice,
     nodes: [
@@ -2941,13 +2954,18 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
     branding,
   };
 
+  // Non-sales agents (leadCapture=false) only get a funnel / lead rules they asked for.
   const funnelResolved =
     inputFunnelConfig ??
-    (ownerNotifyEmails && ownerNotifyEmails.length > 0
-      ? buildDefaultLeadFunnelConfig(ownerNotifyEmails)
-      : buildDefaultLeadFunnelConfig([]));
-  agentCore.funnelConfig = funnelResolved;
-  agentCore.leadCollectionRules = inputLeadCollectionRules ?? DEFAULT_LEAD_COLLECTION_RULES;
+    (leadCaptureEnabled
+      ? buildDefaultLeadFunnelConfig(
+          ownerNotifyEmails && ownerNotifyEmails.length > 0 ? ownerNotifyEmails : []
+        )
+      : undefined);
+  if (funnelResolved) agentCore.funnelConfig = funnelResolved;
+  const leadRulesResolved =
+    inputLeadCollectionRules ?? (leadCaptureEnabled ? DEFAULT_LEAD_COLLECTION_RULES : undefined);
+  if (leadRulesResolved) agentCore.leadCollectionRules = leadRulesResolved;
 
   if (nodesSettings) {
     agentCore.nodesSettings = nodesSettings;
@@ -2963,16 +2981,18 @@ async function createAgentFromTemplateFlowCore(args: z.infer<typeof CreateAgentF
   payload.agent.agentPlatform = 'vg';
   payload.agent.enableNodes = true;
   payload.agent.vg_enableUIEngine = true;
-  payload.agent.vg_enableUIEngineForms = true;
+  if (leadCaptureEnabled) payload.agent.vg_enableUIEngineForms = true;
   payload.agent.vg_defaultModel = chatModelId;
   applyPreferredKbChunkSize(payload.agent);
   delete payload.agent.vg_systemPrompt;
   delete payload.agent.vg_instructions;
   payload.agent = stripDeprecatedAgentFields(payload.agent);
-  if (!payload.agent.vg_uiEngineFormNotifyConfig || typeof payload.agent.vg_uiEngineFormNotifyConfig !== 'object') {
-    payload.agent.vg_uiEngineFormNotifyConfig = { enabled: true };
-  } else {
-    (payload.agent.vg_uiEngineFormNotifyConfig as any).enabled = true;
+  if (leadCaptureEnabled) {
+    if (!payload.agent.vg_uiEngineFormNotifyConfig || typeof payload.agent.vg_uiEngineFormNotifyConfig !== 'object') {
+      payload.agent.vg_uiEngineFormNotifyConfig = { enabled: true };
+    } else {
+      (payload.agent.vg_uiEngineFormNotifyConfig as any).enabled = true;
+    }
   }
 
   stage = 'create_agent';
@@ -3265,6 +3285,7 @@ const coreTools: Tool[] = [
     name: 'create_agent_from_template',
     description:
       'PRIMARY way to create chat+voice agents. Workspace is resolved internally from MCP configuration/workspace secret context (no workspaceId input). Uses strict template invariants: agentPlatform=vg, enableNodes=true, vg_enableUIEngine=true, vg_enableUIEngineForms=true + form notify, default funnelConfig (lead scoring + email notify), nodes[0].kb.enabled (auto RAG, maxChunks=3, vgOptions.maxChunkSize=512), nodes[0].toolsIds includes built-in web-search, chat model always gpt-5.6-luna, standard prompt clauses. vg_* overrides blocked from additionalConfig. ' +
+      'NON-SALES agents (registration, internal, support-only): pass leadCapture=false and appendStandardPromptClauses=false (and attachWebSearchTool=false if it must not browse) so no sales text, funnel or lead forms are added. ' +
       'CRITICAL: bake scraped ground-truth AND a labeled image catalog (after read_image on real photos) into systemPrompt — KB alone is not enough. Pass ownerNotifyEmails so the funnel can email sales. Do NOT invent HTTP notify-sales webhooks. Run 8–12 turn tests before declaring done. ' +
       'Response includes prototypeUrl / tryItUrl — ALWAYS paste that link for the user to try the agent. Pattern: https://app.convocore.ai/{eu|na}/prototype/{agentId}. NEVER invent app.convocore.ai/agents/...',
     inputSchema: {
@@ -3340,6 +3361,28 @@ const coreTools: Tool[] = [
           items: { type: 'string' },
           description:
             'Sales/owner emails. Used for form notify AND funnelConfig.notificationRules. Required for email alerts on hot leads. Do NOT create a custom HTTP webhook for this.',
+        },
+        appendStandardPromptClauses: {
+          type: 'boolean',
+          description:
+            'Default true: appends anti-repetition, lead-capture, knowledge-source, web-search, pricing and photo clauses to systemPrompt. Set false to store systemPrompt exactly as given (use for non-sales agents).',
+        },
+        attachWebSearchTool: {
+          type: 'boolean',
+          description: 'Default true: attaches built-in web-search to the start node. Set false for agents that must not search the web.',
+        },
+        leadCapture: {
+          type: 'boolean',
+          description:
+            'Default true: installs the default lead funnel, lead collection rules and lead forms. Set false for non-sales agents (registration bots, internal assistants).',
+        },
+        enableAutoRag: {
+          type: 'boolean',
+          description: 'Default true: start node auto-retrieves KB chunks.',
+        },
+        modelId: {
+          type: 'string',
+          description: 'Override chat model. Default gpt-5.6-luna; omit unless the user asks for another model.',
         },
         ...FunnelAndLeadsInputSchemaProperties,
         requestId: {

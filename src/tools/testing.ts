@@ -21,7 +21,7 @@ const TestAgentToolRequestSchema = z.object({
   fieldOverrides: z
     .record(z.unknown())
     .optional()
-    .describe('Override field values by key before sending the HTTP request.'),
+    .describe('AI-input values by variable key (e.g. {"whatsapp":"5939..."}). Keys that are not inputs of this tool are ignored for custom HTTP tools.'),
   bodyOverride: z
     .unknown()
     .optional()
@@ -84,7 +84,7 @@ const tools: Tool[] = [
   {
     name: 'test_agent_tool_request',
     description:
-      'Fire a real HTTP request to the tool serverUrl using the saved method/fields (with optional overrides). Bypasses the LLM. Secrets are redacted in the response. Side effects on the remote API are possible — use carefully.',
+      'Fire a real HTTP request for a saved tool, bypassing the LLM. Tools with a custom HTTP request (httpRequest.enabled) are replayed exactly as the live runtime sends them: saved bodyTemplate, fixed values, headers, query and environment variables, with fieldOverrides used as the AI-input values (keyed by variable key). Environment variable values and auth headers are masked in the returned request preview. Legacy serverUrl tools are assembled from fields[]. Side effects on the remote API are possible — use carefully.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,
