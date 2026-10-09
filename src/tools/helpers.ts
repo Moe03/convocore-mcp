@@ -104,3 +104,47 @@ export const ListModeField = z
   .describe(
     'compact (default): short summary fields only — token-cheap. full: complete API objects (heavy). Prefer get_* for one item.'
   );
+
+/** Light-mode field shared by every tool that returns API data. */
+export const LightModeField = z
+  .enum(['compact', 'full'])
+  .optional()
+  .default('compact');
+
+export { LightModeDescribe, applyLightMode } from '../light-mode.js';
+
+export const LightModeProperty = {
+  type: 'string',
+  enum: ['compact', 'full'],
+  description:
+    'compact (default) = light mode: long text is cut and bulky blobs are replaced by a size marker. full = complete API response.',
+} as const;
+
+/** Fail with a clear message when an action is missing one of its inputs. */
+export function requireFor<T extends Record<string, unknown>>(
+  action: string,
+  args: T,
+  ...fields: Array<keyof T & string>
+): void {
+  const missing = fields.filter((field) => {
+    const value = args[field];
+    return value === undefined || value === null || value === '';
+  });
+  if (missing.length > 0) {
+    throw new Error(`${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} required for action=${action}`);
+  }
+}
+
+export const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+export const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;

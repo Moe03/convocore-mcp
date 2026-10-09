@@ -430,6 +430,15 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (compact + cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
 - **"When should the AI reply on WhatsApp / ignore some chats / only reply to X / reply only in working hours / pause the WhatsApp bot"** → \`get_whatsapp_ai_rules\` → \`update_whatsapp_ai_rules\` (phrases, AI rule, schedule, allow/deny list) or \`update_whatsapp_number_settings\` (\`aiPaused\`, coexistence). Not a prompt change.
+- **"Call campaign / dial this lead list"** → \`lead_groups_read\` → \`campaigns_write\` (create, then enable to start dialing). Progress: \`campaigns_read\`.
+- **"Call / text this number now"** → \`get_agent_phone\` → \`start_outbound_call\` / \`send_sms\` (real, billed — confirm the number first). Many leads at once: \`contact_leads\`.
+- **"Call history / what happened on the call"** → \`call_logs_read\` (mode=full for the transcript).
+- **"Support tickets"** → \`tickets_read\` / \`tickets_write\` (list needs orgId from \`orgs_read\`).
+- **"Track X in conversations / analytics metric"** → \`custom_metrics_write\`, results with \`custom_metrics_read\` action=data.
+- **"Who changed this agent?"** → \`get_agent_audit_log\`.
+- **"Organize agents in folders"** → \`folders_read\` / \`folders_write\`.
+- **"Crawl a site into a product catalog / structured search"** → \`crawler_write\` (create_job mode=schema → index_structured_search → attach_structured_search), status with \`crawler_read\`.
+- **Light mode:** every newer read/write tool takes \`mode\`: \`compact\` (default — long text cut, bulky blobs replaced by a size marker) or \`full\` (complete API data). Stay on compact unless a value you need was cut.
 - **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create. Then re-set \`funnelConfig.notificationRules.recipients\` (clones do not inherit them).
 - **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\` (list actions: compact). Mutate with \`*_write\`.
 - **"CRM leads"** → \`leads_read\` / \`leads_write\` (list: compact).

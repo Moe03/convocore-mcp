@@ -1922,6 +1922,27 @@ export class ConvocoreClient {
     });
   }
 
+  /**
+   * Generic JSON call for domain tool modules: query values that are undefined/null/''
+   * are dropped, and a body is only sent when given.
+   */
+  async api<T = any>(
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    endpoint: string,
+    opts: { query?: Record<string, unknown>; body?: unknown } = {}
+  ): Promise<T> {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(opts.query || {})) {
+      if (value === undefined || value === null || value === '') continue;
+      q.set(key, String(value));
+    }
+    const qs = q.toString();
+    return this.request<T>(`${endpoint}${qs ? `?${qs}` : ''}`, {
+      method,
+      ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+    });
+  }
+
   // ─── WhatsApp AI rules ──────────────────────────────────────────────────────
 
   async getWhatsappAiRules(agentId: string): Promise<any> {

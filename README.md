@@ -34,11 +34,29 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Agent HTTP tools | 5 | list/get/create/update/delete Convocore agent tools (not MCP tools) |
 | Agent variables | 5 | list/get/create/update/delete agent variables |
 | WhatsApp AI rules | 3 | `get_whatsapp_ai_rules`, `update_whatsapp_ai_rules`, `update_whatsapp_number_settings` — when the AI replies on WhatsApp |
+| Campaigns | 2 | `campaigns_read` / `campaigns_write` — outbound call campaigns (create, edit, start/stop, restart, delete) |
+| Call logs | 2 | `call_logs_read` / `call_logs_write` — list, get, export, create, edit, delete |
+| Outbound calls & SMS | 4 | `get_agent_phone`, `start_outbound_call`, `send_sms`, `contact_leads` |
+| Support tickets | 2 | `tickets_read` / `tickets_write` — tickets, comments, settings, stats |
+| Custom metrics | 2 | `custom_metrics_read` / `custom_metrics_write` — define metrics and read their data |
+| Lead groups | 2 | `lead_groups_read` / `lead_groups_write` — list, create, assign, rename, delete |
+| Folders | 2 | `folders_read` / `folders_write` — agent folders |
+| Crawler | 2 | `crawler_read` / `crawler_write` — crawl jobs, schema results, structured search |
+| Agent extras | 5 | `get_agent_audit_log`, `send_handoff_reminder`, `generate_conversation_summaries`, `agent_gallery_templates`, `notification_email` |
 | Testing | 3 | `test_agent_tool`, `test_agent_tool_request`, `run_agent_auto_test` |
 | Discovery | 1 | `search_mcp_tools` — find the right tool without guessing |
 | Scrape / embed / voice | many | scrape, embed code, voices, Twilio utils |
 | Interact (WS) | 1 | Drive one agent turn; supports `toolTest` + `variablesOverrides` |
 | Specs | 3 | UI Engine, channel integration, pricing |
+
+---
+
+### Light mode
+
+The tools in the rows from "Campaigns" down to "Agent extras" (and every list tool) take `mode`:
+
+- `compact` (default): every record and field, but long text is cut and bulky blobs (transcripts, page content, histories) are replaced by a size marker.
+- `full`: the complete API response.
 
 ---
 
