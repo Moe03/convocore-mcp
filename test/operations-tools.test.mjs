@@ -90,9 +90,9 @@ describe('light mode', () => {
     const withoutMode = ['send_handoff_reminder', 'notification_email'];
     const names = [
       'campaigns_read', 'campaigns_write', 'call_logs_read', 'call_logs_write', 'get_agent_phone',
-      'start_outbound_call', 'send_sms', 'contact_leads', 'tickets_read', 'tickets_write',
+      'start_outbound_call', 'send_sms', 'contact_leads',
       'custom_metrics_read', 'custom_metrics_write', 'lead_groups_read', 'lead_groups_write',
-      'folders_read', 'folders_write', 'crawler_read', 'crawler_write', 'get_agent_audit_log',
+      'folders_read', 'folders_write', 'get_agent_audit_log',
       'send_handoff_reminder', 'generate_conversation_summaries', 'agent_gallery_templates',
       'notification_email',
     ];
@@ -237,41 +237,6 @@ describe('outbound calls and SMS', () => {
   });
 });
 
-describe('tickets', () => {
-  it('reads', async () => {
-    let r = await one('tickets_read', { action: 'list', orgId: 'o1', status: 'open', pageSize: 5 });
-    assert.equal(sent(r), 'GET /support/tickets');
-    assert.deepEqual(r.query, { orgId: 'o1', status: 'open', pageSize: '5' });
-    assert.equal(sent(await one('tickets_read', { action: 'get', ticketId: 't1' })), 'GET /support/tickets/t1');
-    assert.equal(sent(await one('tickets_read', { action: 'comments', ticketId: 't1' })), 'GET /support/tickets/t1/comments');
-    assert.equal(sent(await one('tickets_read', { action: 'settings' })), 'GET /support/settings');
-    r = await one('tickets_read', { action: 'stats', orgId: 'o1' });
-    assert.equal(sent(r), 'GET /support/stats');
-    const out = await call('tickets_read', { action: 'list' });
-    assert.equal(out.success, false);
-  });
-
-  it('writes', async () => {
-    let r = await one('tickets_write', { action: 'create', orgId: 'o1', ticket: { title: 'T', description: 'D' } });
-    assert.equal(sent(r), 'POST /support/tickets');
-    assert.deepEqual(r.body, { orgId: 'o1', title: 'T', description: 'D' });
-    r = await one('tickets_write', { action: 'update', ticketId: 't1', ticket: { status: 'resolved' } });
-    assert.equal(sent(r), 'PATCH /support/tickets/t1');
-    assert.deepEqual(r.body, { data: { status: 'resolved' } });
-    assert.equal(sent(await one('tickets_write', { action: 'delete', ticketId: 't1' })), 'DELETE /support/tickets/t1');
-    r = await one('tickets_write', { action: 'add_comment', ticketId: 't1', content: 'hello' });
-    assert.equal(sent(r), 'POST /support/tickets/t1/comments');
-    assert.deepEqual(r.body, { content: 'hello', isInternal: false });
-    r = await one('tickets_write', { action: 'update_settings', settings: { enabled: true } });
-    assert.equal(sent(r), 'PATCH /support/settings');
-    assert.deepEqual(r.body, { settings: { enabled: true } });
-    assert.equal(
-      sent(await one('tickets_write', { action: 'regenerate_api_key' })),
-      'POST /support/settings/regenerate-key'
-    );
-  });
-});
-
 describe('custom metrics', () => {
   it('reads, defaulting the range to the last 30 days', async () => {
     assert.equal(sent(await one('custom_metrics_read', { action: 'list', agentId: 'a1' })), 'GET /agents/a1/custom-metrics');
@@ -368,43 +333,6 @@ describe('folders', () => {
     assert.equal(sent(await one('folders_write', { action: 'add_agent', folderId: 'f1', agentId: 'a1' })), 'POST /folders/f1/agents/a1');
     assert.equal(sent(await one('folders_write', { action: 'remove_agent', folderId: 'f1', agentId: 'a1' })), 'DELETE /folders/f1/agents/a1');
     const out = await call('folders_write', { action: 'create', folder: { name: 'x', ownerID: 'someone-else' } });
-    assert.equal(out.success, false);
-  });
-});
-
-describe('crawler', () => {
-  const J = '/workspaces/ws1/crawler/jobs';
-  it('reads', async () => {
-    let r = await one('crawler_read', { action: 'list_jobs', limit: 5 });
-    assert.equal(sent(r), `GET ${J}`);
-    assert.deepEqual(r.query, { limit: '5' });
-    assert.equal(sent(await one('crawler_read', { action: 'get_job', jobId: 'j1' })), `GET ${J}/j1`);
-    assert.equal(sent(await one('crawler_read', { action: 'list_pages', jobId: 'j1' })), `GET ${J}/j1/pages`);
-    assert.equal(sent(await one('crawler_read', { action: 'get_page', jobId: 'j1', pageId: 'p1' })), `GET ${J}/j1/pages/p1`);
-    assert.equal(sent(await one('crawler_read', { action: 'schema_result', jobId: 'j1' })), `GET ${J}/j1/schema-result`);
-    assert.equal(sent(await one('crawler_read', { action: 'freeform_aggregate', jobId: 'j1' })), `GET ${J}/j1/freeform-aggregate`);
-  });
-
-  it('writes', async () => {
-    let r = await one('crawler_write', { action: 'create_job', job: { urls: ['https://example.com'], crawl: true } });
-    assert.equal(sent(r), `POST ${J}`);
-    assert.deepEqual(r.body, { urls: ['https://example.com'], crawl: true });
-    assert.equal(sent(await one('crawler_write', { action: 'delete_job', jobId: 'j1' })), `DELETE ${J}/j1`);
-    assert.equal(sent(await one('crawler_write', { action: 'resume_job', jobId: 'j1' })), `POST ${J}/j1/resume`);
-    r = await one('crawler_write', { action: 'retry_schema_url', jobId: 'j1', url: 'https://example.com/a' });
-    assert.equal(sent(r), `POST ${J}/j1/schema-retry`);
-    assert.equal(sent(await one('crawler_write', { action: 'extend_schema_crawl', jobId: 'j1' })), `POST ${J}/j1/structured-search/extend`);
-    r = await one('crawler_write', { action: 'import_freeform_to_kb', jobId: 'j1', agentId: 'a1' });
-    assert.equal(sent(r), `POST ${J}/j1/freeform-aggregate/import`);
-    assert.deepEqual(r.body, { agentId: 'a1' });
-    assert.equal(sent(await one('crawler_write', { action: 'index_structured_search', jobId: 'j1' })), `POST ${J}/j1/structured-search/index`);
-    r = await one('crawler_write', { action: 'attach_structured_search', jobId: 'j1', agentIds: ['a1'] });
-    assert.equal(sent(r), `POST ${J}/j1/structured-search/attach`);
-    assert.deepEqual(r.body, { agentIds: ['a1'] });
-    assert.equal(sent(await one('crawler_write', { action: 'detach_structured_search', jobId: 'j1', agentIds: ['a1'] })), `POST ${J}/j1/structured-search/detach`);
-    r = await one('crawler_write', { action: 'set_structured_search_description', jobId: 'j1', toolDescription: 'Search products' });
-    assert.equal(sent(r), `POST ${J}/j1/structured-search/tool-description`);
-    const out = await call('crawler_write', { action: 'create_job', job: { urls: [] } });
     assert.equal(out.success, false);
   });
 });

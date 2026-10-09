@@ -12,7 +12,6 @@ import { campaignsModule } from './campaigns.js';
 import { createSearchCatalogModule } from './catalog.js';
 import { clientsModule } from './clients.js';
 import { cloneSendModule } from './clone-send.js';
-import { crawlerModule } from './crawler.js';
 import { customMetricsModule } from './custom-metrics.js';
 import { foldersModule } from './folders.js';
 import type { ToolHandler, ToolModule } from './helpers.js';
@@ -22,7 +21,6 @@ import { leadsModule } from './leads.js';
 import { orgsModule } from './orgs.js';
 import { outboundModule } from './outbound.js';
 import { testingModule } from './testing.js';
-import { ticketsModule } from './tickets.js';
 import { whatsappModule } from './whatsapp.js';
 
 const BASE_MODULES: ToolModule[] = [
@@ -39,11 +37,9 @@ const BASE_MODULES: ToolModule[] = [
   campaignsModule,
   callLogsModule,
   outboundModule,
-  ticketsModule,
   customMetricsModule,
   leadGroupsModule,
   foldersModule,
-  crawlerModule,
   agentExtrasModule,
 ];
 

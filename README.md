@@ -37,11 +37,9 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Campaigns | 2 | `campaigns_read` / `campaigns_write` — outbound call campaigns (create, edit, start/stop, restart, delete) |
 | Call logs | 2 | `call_logs_read` / `call_logs_write` — list, get, export, create, edit, delete |
 | Outbound calls & SMS | 4 | `get_agent_phone`, `start_outbound_call`, `send_sms`, `contact_leads` |
-| Support tickets | 2 | `tickets_read` / `tickets_write` — tickets, comments, settings, stats |
 | Custom metrics | 2 | `custom_metrics_read` / `custom_metrics_write` — define metrics and read their data |
 | Lead groups | 2 | `lead_groups_read` / `lead_groups_write` — list, create, assign, rename, delete |
 | Folders | 2 | `folders_read` / `folders_write` — agent folders |
-| Crawler | 2 | `crawler_read` / `crawler_write` — crawl jobs, schema results, structured search |
 | Agent extras | 5 | `get_agent_audit_log`, `send_handoff_reminder`, `generate_conversation_summaries`, `agent_gallery_templates`, `notification_email` |
 | Testing | 3 | `test_agent_tool`, `test_agent_tool_request`, `run_agent_auto_test` |
 | Discovery | 1 | `search_mcp_tools` — find the right tool without guessing |

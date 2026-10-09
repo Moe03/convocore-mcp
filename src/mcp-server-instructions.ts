@@ -433,11 +433,11 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Call campaign / dial this lead list"** → \`lead_groups_read\` → \`campaigns_write\` (create, then enable to start dialing). Progress: \`campaigns_read\`.
 - **"Call / text this number now"** → \`get_agent_phone\` → \`start_outbound_call\` / \`send_sms\` (real, billed — confirm the number first). Many leads at once: \`contact_leads\`.
 - **"Call history / what happened on the call"** → \`call_logs_read\` (mode=full for the transcript).
-- **"Support tickets"** → \`tickets_read\` / \`tickets_write\` (list needs orgId from \`orgs_read\`).
+- **"Mark this chat resolved / reopen it"** → \`update_conversation\` with \`conversation: { isResolved: true }\` (or \`false\`). There is no separate ticket system: resolved state lives on the conversation.
 - **"Track X in conversations / analytics metric"** → \`custom_metrics_write\`, results with \`custom_metrics_read\` action=data.
 - **"Who changed this agent?"** → \`get_agent_audit_log\`.
 - **"Organize agents in folders"** → \`folders_read\` / \`folders_write\`.
-- **"Crawl a site into a product catalog / structured search"** → \`crawler_write\` (create_job mode=schema → index_structured_search → attach_structured_search), status with \`crawler_read\`.
+- **"Crawl / read a whole website"** → you are the crawler: call \`scrape_url\` (\`mode: "scrape"\`) on the start page, read its links, then scrape the pages that matter one by one, deciding yourself what to follow. There are no crawler-job tools. To load pages into a knowledge base use \`create_kb_from_urls\`.
 - **Light mode:** every newer read/write tool takes \`mode\`: \`compact\` (default — long text cut, bulky blobs replaced by a size marker) or \`full\` (complete API data). Stay on compact unless a value you need was cut.
 - **"Clone this agent"** → \`clone_agent\` (overrides + carryOver). Not \`import_agent\` / template create. Then re-set \`funnelConfig.notificationRules.recipients\` (clones do not inherit them).
 - **"List orgs / clients / agency"** → \`orgs_read\` / \`clients_read\` / \`agency_read\` (list actions: compact). Mutate with \`*_write\`.
