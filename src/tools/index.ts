@@ -9,6 +9,7 @@ import { agentToolsModule } from './agent-tools.js';
 import { agentVariablesModule } from './agent-variables.js';
 import { callLogsModule } from './call-logs.js';
 import { campaignsModule } from './campaigns.js';
+import { channelsModule } from './channels.js';
 import { createSearchCatalogModule } from './catalog.js';
 import { clientsModule } from './clients.js';
 import { cloneSendModule } from './clone-send.js';
@@ -34,6 +35,7 @@ const BASE_MODULES: ToolModule[] = [
   cloneSendModule,
   kbExtrasModule,
   whatsappModule,
+  channelsModule,
   campaignsModule,
   callLogsModule,
   outboundModule,

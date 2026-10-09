@@ -33,6 +33,7 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Leads CRM | 2 | `leads_read` / `leads_write` (list, export, import, magic import, …) |
 | Agent HTTP tools | 5 | list/get/create/update/delete Convocore agent tools (not MCP tools) |
 | Agent variables | 5 | list/get/create/update/delete agent variables |
+| Channels | 4 | `get_agent_channels`, `create_channel_connect_link`, `get_connect_link_status`, `disconnect_meta_page` — connect WhatsApp / Messenger / Instagram through a no-login link |
 | WhatsApp AI rules | 3 | `get_whatsapp_ai_rules`, `update_whatsapp_ai_rules`, `update_whatsapp_number_settings` — when the AI replies on WhatsApp |
 | Campaigns | 2 | `campaigns_read` / `campaigns_write` — outbound call campaigns (create, edit, start/stop, restart, delete) |
 | Call logs | 2 | `call_logs_read` / `call_logs_write` — list, get, export, create, edit, delete |

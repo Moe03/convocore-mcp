@@ -337,6 +337,34 @@ describe('folders', () => {
   });
 });
 
+describe('channels and connect links', () => {
+  it('creates a link and tells the model what to do next', async () => {
+    responses.set('POST /connect-links', { success: true, channel: 'whatsapp', sessionId: 's1', url: 'https://app/x?session=t', expiresAtMs: 1760000000000 });
+    const r = await one('create_channel_connect_link', { channel: 'whatsapp', agentId: 'a1', whatsappConnectionMode: 'metaCoexistence', ttlMinutes: 15 });
+    assert.equal(sent(r), 'POST /connect-links');
+    assert.deepEqual(r.body, { channel: 'whatsapp', agentId: 'a1', ttlMinutes: 15, whatsappConnectionMode: 'metaCoexistence' });
+    assert.equal(r.out.url, 'https://app/x?session=t');
+    assert.equal(r.out.expiresAt, '2025-10-09T08:53:20.000Z');
+    assert.match(r.out.nextSteps.join(' '), /get_agent_channels/);
+  });
+
+  it('does not send the WhatsApp mode for Meta pages', async () => {
+    const r = await one('create_channel_connect_link', { channel: 'instagram', agentId: 'a1', whatsappConnectionMode: 'metaCoexistence' });
+    assert.deepEqual(r.body, { channel: 'instagram', agentId: 'a1' });
+  });
+
+  it('status, channels, disconnect', async () => {
+    assert.equal(sent(await one('get_connect_link_status', { sessionId: 's1' })), 'GET /connect-links/s1');
+    assert.equal(sent(await one('get_agent_channels', { agentId: 'a1' })), 'GET /agents/a1/channels');
+    assert.equal(
+      sent(await one('disconnect_meta_page', { agentId: 'a1', pageId: 'pg1' })),
+      'DELETE /agents/a1/channels/meta-pages/pg1'
+    );
+    const out = await call('create_channel_connect_link', { channel: 'telegram', agentId: 'a1' });
+    assert.equal(out.success, false);
+  });
+});
+
 describe('agent extras', () => {
   it('audit log, handoff reminder, gallery templates, notification email', async () => {
     let r = await one('get_agent_audit_log', { agentId: 'a1', limit: 10 });
