@@ -430,6 +430,14 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Analyze / score / audit conversations"** → \`list_conversations\` (compact + cursor) → \`get_conversations_bulk\` (chunks of 50) or \`query_conversations\`.
 - **"Send WhatsApp / Messenger / SMS as the bot"** → \`send_channel_message\` (pushes to channel; does **not** run LLM). Do **not** use \`update_conversation_messages\` for delivery.
 - **"Connect WhatsApp / Messenger / Instagram"** → \`create_channel_connect_link\` → show the \`url\` to the user (they log in with Meta in their browser; no Convocore login) → when they say done, \`get_agent_channels\` to confirm. Never claim a channel is connected without that check. **"Is my channel connected?"** → \`get_agent_channels\`.
+- **"WhatsApp templates / broadcast to my leads"** → \`whatsapp_templates_read\` / \`whatsapp_templates_write\` → \`whatsapp_campaigns_write\` (always \`run\` with \`dryRun: true\` first). Number details, voice calling, remove / reassign: \`whatsapp_numbers_read\` / \`whatsapp_numbers_write\`.
+- **"The bot did not reply on a channel"** → \`get_agent_channels\` → \`workspace_read\` action=logs (then log_timeline) → for Messenger/Instagram \`meta_pages_read\` check_subscriptions; for WhatsApp \`get_whatsapp_ai_rules\`.
+- **"SMS number / email channel"** → \`sms_numbers_read\` / \`sms_numbers_write\`; \`email_channel_read\` / \`email_channel_write\` (create_domain → user adds DNS records → verify_domain → create_inbox).
+- **"Calendly / Outlook / Zoho"** → \`integrations_read\` / \`integrations_write\` (the first OAuth login is done by the user on the dashboard).
+- **"Same customer on two channels / customer history"** → \`contacts_read\` / \`contacts_write\`.
+- **Before a large agent edit** → \`agent_backups_write\` action=create. **"Undo that / go back"** → \`agent_backups_read\` → \`agent_backups_write\` restore or revert_prompt.
+- **"Tool that runs code / copy this tool to other agents"** → \`code_tools\` (validate → run → save) / \`tool_sharing\`.
+- **"Credits / quota / team / provider keys"** → \`workspace_read\` / \`workspace_write\`.
 - **"When should the AI reply on WhatsApp / ignore some chats / only reply to X / reply only in working hours / pause the WhatsApp bot"** → \`get_whatsapp_ai_rules\` → \`update_whatsapp_ai_rules\` (phrases, AI rule, schedule, allow/deny list) or \`update_whatsapp_number_settings\` (\`aiPaused\`, coexistence). Not a prompt change.
 - **"Call campaign / dial this lead list"** → \`lead_groups_read\` → \`campaigns_write\` (create, then enable to start dialing). Progress: \`campaigns_read\`.
 - **"Call / text this number now"** → \`get_agent_phone\` → \`start_outbound_call\` / \`send_sms\` (real, billed — confirm the number first). Many leads at once: \`contact_leads\`.

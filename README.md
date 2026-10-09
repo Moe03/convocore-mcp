@@ -42,6 +42,13 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Lead groups | 2 | `lead_groups_read` / `lead_groups_write` — list, create, assign, rename, delete |
 | Folders | 2 | `folders_read` / `folders_write` — agent folders |
 | Agent extras | 5 | `get_agent_audit_log`, `send_handoff_reminder`, `generate_conversation_summaries`, `agent_gallery_templates`, `notification_email` |
+| WhatsApp management | 6 | `whatsapp_numbers_read/write`, `whatsapp_templates_read/write`, `whatsapp_campaigns_read/write` |
+| Meta pages, SMS, email | 5 | `meta_pages_read`, `sms_numbers_read/write`, `email_channel_read/write` |
+| Integrations | 2 | `integrations_read` / `integrations_write` — Calendly, Outlook calendar, Zoho CRM |
+| Contacts | 2 | `contacts_read` / `contacts_write` — cross-channel identities |
+| Agent backups | 2 | `agent_backups_read` / `agent_backups_write` — backup, restore, revert prompt, prompt caching |
+| Code tools & sharing | 2 | `code_tools`, `tool_sharing` |
+| Workspace | 3 | `workspace_read` / `workspace_write`, `generate_lead_funnel` |
 | Testing | 3 | `test_agent_tool`, `test_agent_tool_request`, `run_agent_auto_test` |
 | Discovery | 1 | `search_mcp_tools` — find the right tool without guessing |
 | Scrape / embed / voice | many | scrape, embed code, voices, Twilio utils |

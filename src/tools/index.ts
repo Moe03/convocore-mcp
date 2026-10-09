@@ -14,6 +14,8 @@ import { createSearchCatalogModule } from './catalog.js';
 import { clientsModule } from './clients.js';
 import { cloneSendModule } from './clone-send.js';
 import { customMetricsModule } from './custom-metrics.js';
+import { dashboardChannelsModule } from './dashboard-channels.js';
+import { dashboardWorkspaceModule } from './dashboard-workspace.js';
 import { foldersModule } from './folders.js';
 import type { ToolHandler, ToolModule } from './helpers.js';
 import { kbExtrasModule } from './kb-extras.js';
@@ -43,6 +45,8 @@ const BASE_MODULES: ToolModule[] = [
   leadGroupsModule,
   foldersModule,
   agentExtrasModule,
+  dashboardChannelsModule,
+  dashboardWorkspaceModule,
 ];
 
 function mergeModules(modules: ToolModule[]): {

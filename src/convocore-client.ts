@@ -1943,6 +1943,18 @@ export class ConvocoreClient {
     });
   }
 
+  /**
+   * Call an allow-listed dashboard procedure through POST /rpc/{procedure}.
+   * Returns the procedure's own result (the gateway envelope is unwrapped).
+   */
+  async rpc<T = any>(procedure: string, input: Record<string, unknown> = {}): Promise<T> {
+    const result = await this.request<any>(`/rpc/${encodeURIComponent(procedure)}`, {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    });
+    return (result && typeof result === 'object' && 'data' in result ? result.data : result) as T;
+  }
+
   // ─── WhatsApp AI rules ──────────────────────────────────────────────────────
 
   async getWhatsappAiRules(agentId: string): Promise<any> {
