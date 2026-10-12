@@ -5092,8 +5092,23 @@ const { tools: domainTools, handlers: domainHandlers } = buildDomainTools(
 tools = [...coreTools, ...domainTools];
 const domainHandlerMap: Record<string, ToolHandler> = domainHandlers;
 
+// Tools that act on the machine the MCP server runs on (shell commands, local files). On the local
+// stdio server that machine is the user's own, so they are fine. On the HOSTED server (shared by every
+// customer, running on our infrastructure) they would let any caller run commands as root on our
+// server and read its files, so the hosted server neither lists nor accepts them.
+const HOST_LOCAL_TOOLS = new Set([
+  'run_command',
+  'inspect_file',
+  'read_text_file',
+  'read_pdf',
+  'read_docx',
+  'read_spreadsheet',
+  'read_image',
+  'import_file_to_kb',
+]);
+
 // Create MCP server (shared by stdio + hosted transports)
-export function createMcpServer(options?: { name?: string; version?: string }): Server {
+export function createMcpServer(options?: { name?: string; version?: string; hosted?: boolean }): Server {
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
@@ -5110,7 +5125,7 @@ const server = new Server(
 
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools };
+  return { tools: options?.hosted ? tools.filter((t) => !HOST_LOCAL_TOOLS.has(t.name)) : tools };
 });
 
 // ==================== MCP PROMPTS ====================
@@ -5269,6 +5284,18 @@ ${widgetSnippet}
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (options?.hosted && HOST_LOCAL_TOOLS.has(name)) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: `The tool "${name}" is not available on the hosted server because it acts on the local machine. Use the local MCP server (npx convocore-mcp) for it.`,
+        },
+      ],
+    };
+  }
 
   try {
     const domainHandler = domainHandlerMap[name];

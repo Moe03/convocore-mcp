@@ -279,7 +279,7 @@ async function createSession(
     workspaceName,
   });
 
-  const server = createMcpServer({ name: displayName });
+  const server = createMcpServer({ name: displayName, hosted: true });
   record = {
     transport,
     server,
