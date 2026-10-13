@@ -471,7 +471,7 @@ const specs: RpcToolSpec[] = [
     name: 'workspace_write',
     kind: 'write',
     description:
-      'Change workspace settings: name, photo and team members; automatic credit top-up; the workspace\'s own AI provider keys.',
+      'Change workspace settings: name, photo and team members; form-submission notification emails on/off; automatic credit top-up; the workspace\'s own AI provider keys.',
     properties: {
       workspaceName: { type: 'string' },
       workspacePhotoURL: { type: 'string' },
@@ -480,6 +480,10 @@ const specs: RpcToolSpec[] = [
         type: 'array',
         items: { type: 'object' },
         description: 'Per-member role and permissions: [{ email, role: admin|member, permissions[] }].',
+      },
+      formSubmitEmailsEnabled: {
+        type: 'boolean',
+        description: 'For set_form_submit_emails: false silences every "New form submitted" / rating email for all agents in the workspace. Default (unset) is on.',
       },
       autoBilling: { type: 'boolean' },
       threshold: { type: 'number', description: 'For set_auto_billing: credit level that triggers a top-up.' },
@@ -494,6 +498,12 @@ const specs: RpcToolSpec[] = [
         procedure: 'saveWorkspaceTeamAndProfile',
         summary: 'change workspace name / photo / team (read the current team on the dashboard first: the list replaces the old one)',
         input: (a) => pick(a, 'workspaceName', 'workspacePhotoURL', 'workspaceEmails', 'usersPerms'),
+      },
+      set_form_submit_emails: {
+        procedure: 'saveWorkspaceTeamAndProfile',
+        summary: 'turn the workspace-wide "New form submitted" / rating notification emails on or off (default on); per-agent override is vg_uiEngineFormNotifyConfig.enabled',
+        required: ['formSubmitEmailsEnabled'],
+        input: (a) => pick(a, 'formSubmitEmailsEnabled'),
       },
       set_auto_billing: {
         procedure: 'postChangeAutoBilling',
