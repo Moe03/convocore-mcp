@@ -21,7 +21,7 @@ test('partial toolsIds patch keeps existing instructions', () => {
     { id: '__start__', toolsIds: ['web-search'] },
   ]);
   assert.equal(merged[0].instructions, 'Ivy prompt — do not wipe');
-  assert.deepEqual(merged[0].toolsIds, ['web-search']);
+  assert.deepEqual(merged[0].toolsIds, ['web-search', 'dead-http-tool']);
   assert.equal(merged[0].kb.maxChunks, 8);
   assert.equal(merged.length, 2);
   assert.equal(merged[1].id, 'note-1');
@@ -59,8 +59,22 @@ test('start-node-not-at-zero keeps instructions on the real start node', () => {
   ];
   const merged = mergeAgentNodesForUpdate(existing, [{ id: '__start__', toolsIds: ['web-search'] }]);
   assert.equal(merged[1].instructions, 'Ivy prompt — do not wipe');
-  assert.deepEqual(merged[1].toolsIds, ['web-search']);
+  assert.deepEqual(merged[1].toolsIds, ['dead', 'web-search']);
   assert.equal(merged[0].id, 'note-1');
+});
+
+test('toolsIds: [] patch does not detach dashboard-attached tools', () => {
+  const existing = [{ id: '__start__', type: 'start', instructions: 'p', toolsIds: ['calendar', 'web-search'] }];
+  const merged = mergeAgentNodesForUpdate(existing, [{ id: '__start__', toolsIds: [] }]);
+  assert.deepEqual(merged[0].toolsIds, ['calendar', 'web-search']);
+});
+
+test('allowRemoveTools lets a patch deliberately replace toolsIds', () => {
+  const existing = [{ id: '__start__', type: 'start', instructions: 'p', toolsIds: ['calendar', 'web-search'] }];
+  const merged = mergeAgentNodesForUpdate(existing, [{ id: '__start__', toolsIds: ['web-search'] }], {
+    allowRemoveTools: true,
+  });
+  assert.deepEqual(merged[0].toolsIds, ['web-search']);
 });
 
 test('readStartNodeInstructions falls back to vg_instructions when start is empty', () => {

@@ -648,6 +648,10 @@ const UpdateAgentSchema = z.object({
     .describe(
       'Optional node patch. MCP GET-merges onto existing nodes by id. Never send a partial start node as a full graph. Prefer systemPrompt / patch_agent_prompt for prompt edits. Unrelated updates (title, UI flags, funnel) should omit nodes entirely.'
     ),
+  allowRemoveTools: z
+    .boolean()
+    .optional()
+    .describe('Default false: nodes[].toolsIds in a patch are ADDED to the live list, never remove tools. Set true only to deliberately detach tools (the patch toolsIds then replaces the list).'),
   additionalConfig: z
     .record(z.any())
     .optional()
@@ -3272,6 +3276,11 @@ const coreTools: Tool[] = [
           description:
             'Optional nodes. If omitted with systemPrompt, MCP creates the start node. Main prompt MUST be nodes[0].instructions.',
         },
+        allowRemoveTools: {
+          type: 'boolean',
+          description:
+            'Default false: toolsIds in a nodes patch are unioned with the live list. Set true only to intentionally remove tools.',
+        },
         additionalConfig: {
           type: 'object',
           description:
@@ -3422,7 +3431,7 @@ const coreTools: Tool[] = [
       'Update an existing Convocore agent (PATCH). For large prompt edits prefer patch_agent_prompt. ' +
       'Main prompt: use systemPrompt → start node instructions. NEVER send vg_instructions or vg_systemPrompt. ' +
       'Do NOT pass nodes[] unless you are changing nodes — omit it for title/UI/funnel/model updates. ' +
-      'Partial nodes[] are GET-merged by id; a toolsIds-only start node cannot blank instructions. ' +
+      'Partial nodes[] are GET-merged by id; a toolsIds-only start node cannot blank instructions, and toolsIds in a patch are only ever ADDED (tools attached on the dashboard are kept). To detach tools pass allowRemoveTools=true. ' +
       'Lead notify: funnelConfig (steps + notificationRules.recipients). UI Engine: vg_enableUIEngine* + vg_uiEngineChannelConfig. ownerID is read-only.',
     inputSchema: {
       type: 'object',
@@ -5410,7 +5419,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'update_agent': {
         const validated = UpdateAgentSchema.parse(args);
-        const { agentId, additionalConfig, ...updateFields } = validated;
+        const { agentId, additionalConfig, allowRemoveTools, ...updateFields } = validated;
         const existing = unwrapAgentRecord(await getActiveClient().getAgent(agentId));
         const existingId =
           typeof existing.ID === 'string'
@@ -5462,7 +5471,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               `get_agent(${agentId}) returned enableNodes=true but no nodes[]. Refusing to PATCH nodes — that would replace the live graph. Retry get_agent.`
             );
           }
-          mergedFields.nodes = mergeAgentNodesForUpdate(existing.nodes, mergedFields.nodes);
+          mergedFields.nodes = mergeAgentNodesForUpdate(existing.nodes, mergedFields.nodes, {
+            allowRemoveTools: allowRemoveTools === true,
+          });
         } else if (systemPrompt) {
           if (liveNodes.length === 0 && existing.enableNodes === true) {
             throw new Error(

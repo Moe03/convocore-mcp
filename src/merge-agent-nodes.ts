@@ -30,13 +30,25 @@ function looksPartialNode(node: Record<string, unknown>): boolean {
   return !hasInstructions;
 }
 
+export interface MergeNodesOptions {
+  /** Let a patch REMOVE ids from node toolsIds. Default false: toolsIds is union-merged. */
+  allowRemoveTools?: boolean;
+}
+
 function mergeRecord(
   base: Record<string, unknown>,
-  patch: Record<string, unknown>
+  patch: Record<string, unknown>,
+  options?: MergeNodesOptions
 ): Record<string, unknown> {
   const out = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
+    // toolsIds attached on the dashboard (calendar, integrations…) must survive a partial
+    // patch: a plain overwrite with [] silently detached them.
+    if (key === 'toolsIds' && Array.isArray(value) && Array.isArray(base.toolsIds) && !options?.allowRemoveTools) {
+      out.toolsIds = [...new Set([...(base.toolsIds as unknown[]), ...value])];
+      continue;
+    }
     if (
       key === 'instructions' &&
       value === '' &&
@@ -59,7 +71,11 @@ function asNodeList(value: unknown): Record<string, unknown>[] {
 }
 
 /** Merge a partial `nodes` PATCH onto the agent's current nodes (by id, else index). */
-export function mergeAgentNodesForUpdate(existing: unknown, incoming: unknown): Record<string, unknown>[] {
+export function mergeAgentNodesForUpdate(
+  existing: unknown,
+  incoming: unknown,
+  options?: MergeNodesOptions
+): Record<string, unknown>[] {
   const current = asNodeList(existing);
   const patch = asNodeList(incoming);
   if (patch.length === 0) return current;
@@ -89,7 +105,7 @@ export function mergeAgentNodesForUpdate(existing: unknown, incoming: unknown): 
       idx = i;
     }
     if (idx >= 0 && idx < current.length) {
-      current[idx] = mergeRecord(current[idx], p);
+      current[idx] = mergeRecord(current[idx], p, options);
     } else {
       current.push(p);
       if (id) byId.set(id, current.length - 1);
