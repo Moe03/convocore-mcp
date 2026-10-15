@@ -110,8 +110,9 @@ flowchart LR
 | `CONVOCORE_API_BASE_URL` | No | — | Optional full REST base URL override. Useful for local dev, e.g. `http://localhost:5000/v3`. Overrides `CONVOCORE_API_REGION` when set. The `/interact` WebSocket URL is derived from this (scheme swapped to `ws/wss`, path replaced with `/interact`) unless `CONVOCORE_INTERACT_WS_URL` is also set. |
 | `CONVOCORE_INTERACT_WS_URL` | No | — | Optional explicit override for **only** the `/interact` WebSocket URL, e.g. `ws://localhost:5000/interact`. Set this when you want REST traffic on prod but WebSocket traffic on a local debug server (or vice-versa). Used verbatim — supply scheme, host, port, and path. |
 | `CONVOCORE_WORKSPACE_ID` | No | — | Workspace/org UUID (`agent.ownerID`). When set, MCP avoids heavy `GET /agents` scans used only to infer the workspace id. |
+| `CONVOCORE_TELEMETRY` | No | on | Set to `0` to turn off anonymous usage telemetry. See [Telemetry](#telemetry). |
 
-The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_API_BASE_URL`, optional `CONVOCORE_INTERACT_WS_URL`, and optional `CONVOCORE_WORKSPACE_ID`. Any other variables in compose files or docs are ignored unless you wire them yourself.
+The server reads `WORKSPACE_SECRET`, `CONVOCORE_API_REGION`, optional `CONVOCORE_API_BASE_URL`, optional `CONVOCORE_INTERACT_WS_URL`, optional `CONVOCORE_WORKSPACE_ID`, and optional `CONVOCORE_TELEMETRY` / `CONVOCORE_TELEMETRY_DEBUG` / `DO_NOT_TRACK`. Any other variables in compose files or docs are ignored unless you wire them yourself.
 
 ### API regions and base URLs
 
@@ -608,6 +609,31 @@ pnpm publish --access public
 ```bash
 docker push moe003/convocore-mcp:latest
 ```
+
+---
+
+## Telemetry
+
+Like Next.js, convocore-mcp collects anonymous usage data to learn which tools are used and where they fail. It is **on by default**.
+
+**What is sent, per tool call:** the tool name, whether it succeeded, a short error category (e.g. `input_validation_error`), how long it took, the MCP client name and version (e.g. Claude Desktop, Cursor), the convocore-mcp version, Node.js version, OS platform, and a random id for the current server process.
+
+**What is never sent:** tool arguments, tool results, prompts, agent content, contacts, conversations, or any file contents.
+
+Events are batched and sent to the Convocore API in your own region (`<base URL>/mcp/telemetry`), authenticated with your workspace secret, so they are tied to your workspace and nothing else. Sending happens in the background and never slows down or fails a tool call.
+
+**Opt out** by setting either variable in your MCP config's `env`:
+
+```json
+"env": {
+  "WORKSPACE_SECRET": "...",
+  "CONVOCORE_TELEMETRY": "0"
+}
+```
+
+`DO_NOT_TRACK=1` is respected too. To see exactly what would be sent without sending anything, set `CONVOCORE_TELEMETRY_DEBUG=1`; events are printed to stderr.
+
+The hosted server at `mcp.convocore.ai` runs on Convocore infrastructure and records the same events.
 
 ---
 

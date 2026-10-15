@@ -13,11 +13,18 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
   Tool,
+  type CallToolRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
+import {
+  classifyToolResult,
+  installTelemetryExitHooks,
+  printTelemetryNoticeOnce,
+  recordToolCall,
+} from './telemetry.js';
 import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
 import {
   getActiveClient,
@@ -5291,7 +5298,7 @@ ${widgetSnippet}
 });
 
 // Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const handleCallTool = async (request: CallToolRequest) => {
   const { name, arguments: args } = request.params;
 
   if (options?.hosted && HOST_LOCAL_TOOLS.has(name)) {
@@ -6726,6 +6733,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
     };
   }
+};
+
+// Every tool call goes through here, so this is the single place usage telemetry is recorded.
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const startedAt = performance.now();
+  const result = await handleCallTool(request);
+  let config = null;
+  try {
+    config = getActiveConfig();
+  } catch {
+    // No request context (should not happen) — skip telemetry for this call.
+  }
+  const client = server.getClientVersion();
+  recordToolCall(config, {
+    tool: request.params.name,
+    ...classifyToolResult(result),
+    durationMs: performance.now() - startedAt,
+    transport: options?.hosted ? 'hosted' : 'stdio',
+    clientName: client?.name,
+    clientVersion: client?.version,
+  });
+  return result;
 });
 
   return server;
@@ -6745,6 +6774,9 @@ async function startStdioTransport() {
   }
   const defaultConfig = getConfig();
   initDefaultRequestContext(new ConvocoreClient(defaultConfig), defaultConfig);
+
+  printTelemetryNoticeOnce();
+  installTelemetryExitHooks();
 
   const server = createMcpServer();
   const transport = new StdioServerTransport();
