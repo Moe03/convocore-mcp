@@ -53,6 +53,7 @@ const EXPECTED_DOMAIN_TOOLS = [
   'email_channel_write',
   'integrations_read',
   'integrations_write',
+  'integrations_test',
   'zoho_crm_records_read',
   'zoho_crm_records_write',
   'contacts_read',

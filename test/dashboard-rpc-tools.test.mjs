@@ -156,7 +156,7 @@ describe('gateway-backed tools', () => {
       tool: {}, toolId: 't', targetAgentId: 'a2', targetAgentIds: ['a2'], access: 'workspace', scope: 'workspace',
       agentPrompt: 'p', logId: 1, traceId: 'tr', autoBilling: false, keys: {},
       query: 'select id from Leads where id is not null', recordId: '1', recordIds: ['1'], records: [{ Last_Name: 'x' }],
-      title: 't', content: 'c',
+      title: 't', content: 'c', type: 'google_calendar', settings: {}, formSubmitEmailsEnabled: true,
     };
     let actions = 0;
     for (const tool of tools) {

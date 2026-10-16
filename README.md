@@ -44,7 +44,8 @@ The server declares **tools only** (no MCP resources or prompts in code). Each s
 | Agent extras | 5 | `get_agent_audit_log`, `send_handoff_reminder`, `generate_conversation_summaries`, `agent_gallery_templates`, `notification_email` |
 | WhatsApp management | 6 | `whatsapp_numbers_read/write`, `whatsapp_templates_read/write`, `whatsapp_campaigns_read/write` |
 | Meta pages, SMS, email | 5 | `meta_pages_read`, `sms_numbers_read/write`, `email_channel_read/write` |
-| Integrations | 2 | `integrations_read` / `integrations_write` — Calendly, Outlook calendar, Zoho CRM |
+| Integrations | 3 | `integrations_read` / `integrations_write` / `integrations_test` — every connection (Google Calendar, Outlook Calendar, Google Sheets, Airtable, Shopify, Calendly, Zoho CRM, Gmail, Outlook mail, Zoho Mail, Google Drive), assign / update / remove on agents, diagnose an agent's setup, and inspect or run the agent's real integration tools |
+| Zoho CRM records | 2 | `zoho_crm_records_read` / `zoho_crm_records_write` — list, search, COQL, get; create, update, upsert, delete, notes |
 | Contacts | 2 | `contacts_read` / `contacts_write` — cross-channel identities |
 | Agent backups | 2 | `agent_backups_read` / `agent_backups_write` — backup, restore, revert prompt, prompt caching |
 | Code tools & sharing | 2 | `code_tools`, `tool_sharing` |

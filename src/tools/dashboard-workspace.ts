@@ -9,7 +9,22 @@ import { buildRpcModule, pick, type RpcToolSpec } from './rpc-tools.js';
 
 const agentId = { type: 'string' } as const;
 const orgId = { type: 'string', description: 'Optional organization scope.' } as const;
-const connectionId = { type: 'string', description: 'Integration connection id (from the *_connections action).' } as const;
+const connectionId = { type: 'string', description: 'Integration connection id (from integrations_read all_connections).' } as const;
+
+/** Integration types of the integrations hub (same list as vg-docker INTEGRATION_TYPES). */
+const INTEGRATION_TYPES = [
+  'google_calendar',
+  'outlook_calendar',
+  'google_sheets',
+  'airtable',
+  'shopify',
+  'calendly',
+  'zoho_crm',
+  'gmail',
+  'outlook_mail',
+  'zoho_mail',
+  'google_drive',
+] as const;
 
 /** Zoho record tools: use the given connection, or the workspace's only one. */
 async function withZohoConnection(
@@ -59,15 +74,42 @@ const specs: RpcToolSpec[] = [
     name: 'integrations_read',
     kind: 'read',
     description:
-      'Read the calendar / CRM integrations of the workspace: Calendly, Outlook calendar and Zoho CRM. The first connection (OAuth login) is made by the user on the dashboard Integrations page; everything after that can be configured here.',
+      'See every integration of the workspace exactly like the dashboard Integrations page: Google Calendar, Outlook Calendar, Google Sheets, Airtable, Shopify, Calendly, Zoho CRM, Gmail, Outlook mail, Zoho Mail and Google Drive. ' +
+      'Start with all_connections (every connection id, account, and which agents use it), then agent_integrations to see and debug what one agent has configured (it lists problems such as a missing calendar, a deleted connection or an inbox whose notifications stopped). ' +
+      'resources lists what can be picked for an agent: calendars (google_calendar / outlook_calendar), spreadsheet tabs + header columns (google_sheets, pass sheetId), Airtable bases then tables + fields (pass baseId), Calendly event types, Zoho CRM modules, Shopify store check. ' +
+      'A first connection (OAuth login) is always made by the user on the dashboard Integrations page; everything after that is done with integrations_write and integrations_test.',
     properties: {
       agentId,
       connectionId,
+      type: { type: 'string', enum: [...INTEGRATION_TYPES], description: 'For resources: which integration.' },
+      types: { type: 'array', items: { type: 'string', enum: [...INTEGRATION_TYPES] }, description: 'For all_connections: only these integrations.' },
+      includeAgentUsage: { type: 'boolean', description: 'For all_connections: include which agents use each connection (default true).' },
+      sheetId: { type: 'string', description: 'For resources type=google_sheets: spreadsheet id → its tabs and header row.' },
+      sheetTabName: { type: 'string', description: 'For resources type=google_sheets: tab whose headers to read (default first tab).' },
+      headerRowIndex: { type: 'number', description: 'For resources type=google_sheets: header row number (default 1).' },
+      baseId: { type: 'string', description: 'For resources type=airtable: base id → its tables and fields.' },
       moduleApiName: { type: 'string', description: 'For zoho_fields: Zoho module API name, e.g. "Leads".' },
       force: { type: 'boolean', description: 'For zoho_fields: bypass the cache.' },
       orgId,
     },
     actions: {
+      all_connections: {
+        procedure: 'integrationsHub.listConnections',
+        summary: 'every connection of every integration, with the agents using each',
+        input: (a) => pick(a, 'types', 'includeAgentUsage', 'orgId'),
+      },
+      agent_integrations: {
+        procedure: 'integrationsHub.getAgentIntegrations',
+        summary: "one agent's integrations, settings and detected problems",
+        required: ['agentId'],
+        input: (a) => pick(a, 'agentId', 'orgId'),
+      },
+      resources: {
+        procedure: 'integrationsHub.listResources',
+        summary: 'calendars / sheet tabs + headers / Airtable bases, tables, fields / Calendly event types / Zoho modules / Shopify check',
+        required: ['type'],
+        input: (a) => pick(a, 'type', 'connectionId', 'sheetId', 'sheetTabName', 'headerRowIndex', 'baseId', 'orgId'),
+      },
       calendly_event_types: {
         procedure: 'calendly.listEventTypes',
         summary: 'Calendly event types that can be offered by agents',
@@ -118,11 +160,18 @@ const specs: RpcToolSpec[] = [
     name: 'integrations_write',
     kind: 'write',
     description:
-      'Configure Calendly, Outlook calendar and Zoho CRM for agents, once the account is connected. For Zoho the usual flow is zoho_auto_configure (drafts a config) → zoho_test_lookup (try it with a real phone / email) → zoho_save_agent_config.',
+      'Add, change or remove an integration on an agent, exactly like the dashboard. assign_to_agent also updates an existing setup (call it again with new settings); remove_from_agent removes it. ' +
+      'settings by type — google_calendar / outlook_calendar: { connectionId, calendarId, calendarName?, timezone? ("Europe/London" or "GMT+1"), label?, description?, methods? (create-event, check-availability, lookup-events, update-event, delete-event), bookingMode? ("route" = caller picks one calendar, "union" = any free calendar), defaultCallerTimezone? ("" = same as calendar, "ask", or a zone), disableMeetLink? (google, in-person) } — up to 5 calendars per agent; remove one with { calendarId } or all with {}. ' +
+      'google_sheets: { connectionId, sheetId, sheetTabName, method: "read" | "lookup" | "write", sheetName?, sheetDescription?, headerRowIndex?, headerDescriptions? {column: meaning}, identifierColumn?, identityFields? { phone, email, name, custom, customLabel } } — up to 5 sheets; remove one with { sheetId }. ' +
+      'airtable: { connectionId, baseId, tableId?, method?, fieldDescriptions?, identifierField? }. shopify: { connectionId }. calendly: { connectionId }. zoho_crm: { config } (draft it with zoho_auto_configure). ' +
+      'gmail / outlook_mail / zoho_mail (the agent answers that inbox): { connectionId, whenToReply? (always | keywords | sentiment | manual), replyDelayMinutes?, replyRule?, humanNotifyRule?, replyLength? (short | medium | long | auto), replyTone?, keywords?, ignoreKeywords?, humanTakeoverEnabled?, humanTakeoverTimeoutMinutes?, notifyWorkspaceOwners? } — also starts inbound notifications. ' +
+      'Get ids from integrations_read (all_connections, resources). After assigning, verify with integrations_read agent_integrations and integrations_test.',
     properties: {
       agentId,
       agentIds: { type: 'array', items: { type: 'string' }, description: 'For calendly_assign_agents.' },
       connectionId,
+      type: { type: 'string', enum: [...INTEGRATION_TYPES], description: 'For assign_to_agent / remove_from_agent.' },
+      settings: { type: 'object', description: 'For assign_to_agent / remove_from_agent: see the shapes above.' },
       selectedEventTypes: { type: 'array', items: { type: 'object' }, description: 'For calendly_save_event_types: event type objects from integrations_read.' },
       config: { type: 'object', description: 'Zoho agent sync config (shape as returned by zoho_agent_config / zoho_auto_configure).' },
       moduleApiNames: { type: 'array', items: { type: 'string' }, description: 'For zoho_auto_configure: up to 5 modules.' },
@@ -133,6 +182,18 @@ const specs: RpcToolSpec[] = [
       orgId,
     },
     actions: {
+      assign_to_agent: {
+        procedure: 'integrationsHub.configureAgent',
+        summary: 'add or update an integration on an agent',
+        required: ['agentId', 'type', 'settings'],
+        input: (a) => ({ ...pick(a, 'agentId', 'type', 'settings', 'orgId'), action: 'assign' }),
+      },
+      remove_from_agent: {
+        procedure: 'integrationsHub.configureAgent',
+        summary: 'remove an integration (or one calendar / sheet / inbox) from an agent',
+        required: ['agentId', 'type'],
+        input: (a) => ({ ...pick(a, 'agentId', 'type', 'settings', 'orgId'), action: 'remove' }),
+      },
       calendly_save_event_types: {
         procedure: 'calendly.saveEventTypes',
         summary: 'choose which Calendly event types agents may offer',
@@ -186,6 +247,39 @@ const specs: RpcToolSpec[] = [
         summary: 'remove Zoho CRM from an agent',
         required: ['agentId'],
         input: (a) => pick(a, 'agentId', 'orgId'),
+      },
+    },
+  },
+  {
+    name: 'integrations_test',
+    kind: 'write',
+    description:
+      "Test an agent's integration tools with the agent's REAL runtime code and settings. " +
+      'inspect (no side effects): the exact tool names, descriptions and parameters the agent sees for that integration — use it to debug why the agent misuses a tool. ' +
+      'run: executes one of those tools with the given args, exactly as if the agent called it, and returns its output or error. ' +
+      'Safe checks first: google-calendar / outlook-calendar check-availability or lookup-events, google-sheets read / lookup, airtable read, shopify read, calendly list_event_types / check_availability. ' +
+      'create / update / delete events, sheet writes and Airtable creates really happen — confirm with the user before running those.',
+    required: ['agentId', 'toolId'],
+    properties: {
+      agentId,
+      toolId: {
+        type: 'string',
+        enum: ['google-calendar', 'outlook-calendar', 'google-sheets', 'airtable', 'shopify', 'calendly', 'sms', 'web-search'],
+      },
+      toolName: { type: 'string', description: 'For run: which tool from inspect (calendars expose several, e.g. one per method).' },
+      args: { type: 'object', description: 'For run: the tool arguments, matching the parameters from inspect.' },
+      orgId,
+    },
+    actions: {
+      inspect: {
+        procedure: 'integrationsHub.testAgentTool',
+        summary: 'what the agent sees for this integration (names, descriptions, parameters)',
+        input: (a) => ({ ...pick(a, 'agentId', 'toolId', 'orgId'), mode: 'inspect' }),
+      },
+      run: {
+        procedure: 'integrationsHub.testAgentTool',
+        summary: 'run one tool with args, as the agent would',
+        input: (a) => ({ ...pick(a, 'agentId', 'toolId', 'toolName', 'args', 'orgId'), mode: 'run' }),
       },
     },
   },
