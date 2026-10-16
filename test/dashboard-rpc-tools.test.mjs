@@ -155,6 +155,8 @@ describe('gateway-backed tools', () => {
       convoIds: ['c'], consentStatus: 'granted', backupId: 'b', snapshotId: 's', code: 'return 1', userRequest: 'r',
       tool: {}, toolId: 't', targetAgentId: 'a2', targetAgentIds: ['a2'], access: 'workspace', scope: 'workspace',
       agentPrompt: 'p', logId: 1, traceId: 'tr', autoBilling: false, keys: {},
+      query: 'select id from Leads where id is not null', recordId: '1', recordIds: ['1'], records: [{ Last_Name: 'x' }],
+      title: 't', content: 'c',
     };
     let actions = 0;
     for (const tool of tools) {
@@ -167,5 +169,30 @@ describe('gateway-backed tools', () => {
       }
     }
     assert.ok(actions >= 85, `expected the full action set, ran ${actions}`);
+  });
+});
+
+describe('zoho crm record tools', () => {
+  it('fill in connectionId when the workspace has one Zoho account, and pass the operation', async () => {
+    responses.set('zohoCrm.listConnections', [{ id: 'zc1', orgName: 'Acme' }]);
+    await call('zoho_crm_records_read', { action: 'list', moduleApiName: 'Leads', perPage: 200 });
+    assert.deepEqual(calls.map((c) => c.procedure), ['zohoCrm.listConnections', 'zohoCrm.listRecords']);
+    const list = calls[1];
+    assert.equal(list.procedure, 'zohoCrm.listRecords');
+    assert.deepEqual(list.input, { connectionId: 'zc1', moduleApiName: 'Leads', perPage: 200 });
+
+    await call('zoho_crm_records_write', { action: 'update', moduleApiName: 'Leads', records: [{ id: '1', Lead_Status: 'New' }] });
+    const write = calls[calls.length - 1];
+    assert.equal(write.procedure, 'zohoCrm.writeRecords');
+    assert.equal(write.input.operation, 'update');
+    assert.equal(write.input.connectionId, 'zc1');
+  });
+
+  it('ask for connectionId when several Zoho accounts are connected', async () => {
+    responses.set('zohoCrm.listConnections', [{ id: 'zc1' }, { id: 'zc2', orgName: 'Other' }]);
+    const out = await call('zoho_crm_records_read', { action: 'search', moduleApiName: 'Leads', email: 'a@b.com' });
+    assert.equal(out.success, false);
+    assert.match(out.message, /zc2 \(Other\)/);
+    responses.delete('zohoCrm.listConnections');
   });
 });

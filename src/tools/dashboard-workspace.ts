@@ -3,12 +3,56 @@
  * agent backups, code tools, tool sharing, lead funnel generation and workspace settings.
  */
 
+import type { ConvocoreClient } from '../convocore-client.js';
 import { type ToolModule } from './helpers.js';
 import { buildRpcModule, pick, type RpcToolSpec } from './rpc-tools.js';
 
 const agentId = { type: 'string' } as const;
 const orgId = { type: 'string', description: 'Optional organization scope.' } as const;
 const connectionId = { type: 'string', description: 'Integration connection id (from the *_connections action).' } as const;
+
+/** Zoho record tools: use the given connection, or the workspace's only one. */
+async function withZohoConnection(
+  args: Record<string, any>,
+  client: ConvocoreClient,
+  ...keys: string[]
+): Promise<Record<string, unknown>> {
+  const input = pick(args, 'connectionId', 'orgId', ...keys);
+  if (input.connectionId) return input;
+  const listed = await client.rpc<any>('zohoCrm.listConnections', pick(args, 'orgId'));
+  const connections: Array<{ id: string; label?: string; orgName?: string }> = Array.isArray(listed)
+    ? listed
+    : Array.isArray(listed?.connections)
+      ? listed.connections
+      : [];
+  if (connections.length === 1) return { ...input, connectionId: connections[0].id };
+  if (connections.length === 0) {
+    throw new Error('No Zoho CRM account is connected. The user connects it once on the dashboard Integrations page.');
+  }
+  throw new Error(
+    `Several Zoho CRM accounts are connected; pass connectionId. Options: ${connections
+      .map((c) => `${c.id}${c.orgName || c.label ? ` (${c.orgName || c.label})` : ''}`)
+      .join(', ')}`
+  );
+}
+
+const zohoModule = {
+  type: 'string',
+  description: 'Zoho module API name: Leads, Contacts, Accounts, Deals, or a custom module (see integrations_read zoho_modules).',
+} as const;
+const zohoConnection = {
+  type: 'string',
+  description: 'Zoho connection id. Optional when the workspace has only one Zoho account.',
+} as const;
+const zohoFields = {
+  type: 'array',
+  items: { type: 'string' },
+  description: 'Field API names to return (max 50). Default for list: up to 50 standard then custom fields.',
+} as const;
+const zohoWorkflow = {
+  type: 'boolean',
+  description: 'Run the Zoho workflow rules on this change (default true).',
+} as const;
 
 const specs: RpcToolSpec[] = [
   {
@@ -142,6 +186,134 @@ const specs: RpcToolSpec[] = [
         summary: 'remove Zoho CRM from an agent',
         required: ['agentId'],
         input: (a) => pick(a, 'agentId', 'orgId'),
+      },
+    },
+  },
+  {
+    name: 'zoho_crm_records_read',
+    kind: 'read',
+    description:
+      'Browse and search records in the connected Zoho CRM: leads, contacts, deals, accounts or any custom module. ' +
+      'list pages through a module (perPage up to 200; pass info.nextPageToken as pageToken past 2000 records). ' +
+      'search uses Zoho criteria, e.g. "(Lead_Status:equals:New)" or "((Lead_Source:equals:Chat)and(Created_Time:greater_than:2026-10-01T00:00:00+00:00))"; ' +
+      'operators: equals, not_equal, starts_with, in, greater_than, less_than, between. ' +
+      'query runs COQL for anything else, e.g. "select Last_Name, Email, Lead_Status from Leads where Lead_Status = \'New\' order by Created_Time desc limit 200" (a where clause is required; limit max 2000, use "limit 200, 200" to page). ' +
+      'Use integrations_read zoho_fields for the field API names and picklist values.',
+    properties: {
+      connectionId: zohoConnection,
+      moduleApiName: zohoModule,
+      fields: zohoFields,
+      page: { type: 'number', description: 'For list / search: page number (default 1).' },
+      perPage: { type: 'number', description: 'For list / search: records per page, max 200 (default 50).' },
+      pageToken: { type: 'string', description: 'For list: info.nextPageToken from the previous page (needed past 2000 records).' },
+      sortBy: { type: 'string', enum: ['id', 'Created_Time', 'Modified_Time'], description: 'For list.' },
+      sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'For list.' },
+      cvid: { type: 'string', description: 'For list: id of a Zoho custom view to list from.' },
+      criteria: { type: 'string', description: 'For search: Zoho criteria expression.' },
+      word: { type: 'string', description: 'For search: free-text search.' },
+      email: { type: 'string', description: 'For search: exact email.' },
+      phone: { type: 'string', description: 'For search: phone number.' },
+      query: { type: 'string', description: 'For query: a COQL SELECT statement.' },
+      recordId: { type: 'string', description: 'For get: the Zoho record id.' },
+      orgId,
+    },
+    actions: {
+      list: {
+        procedure: 'zohoCrm.listRecords',
+        summary: 'one page of records of a module, newest first if sortBy=Created_Time sortOrder=desc',
+        required: ['moduleApiName'],
+        input: (a, client) =>
+          withZohoConnection(a, client, 'moduleApiName', 'fields', 'page', 'perPage', 'pageToken', 'sortBy', 'sortOrder', 'cvid'),
+      },
+      search: {
+        procedure: 'zohoCrm.searchRecords',
+        summary: 'records matching criteria / word / email / phone',
+        required: ['moduleApiName'],
+        input: (a, client) =>
+          withZohoConnection(a, client, 'moduleApiName', 'criteria', 'word', 'email', 'phone', 'fields', 'page', 'perPage'),
+      },
+      query: {
+        procedure: 'zohoCrm.queryRecords',
+        summary: 'COQL SELECT for filters, sorting and counts search cannot do',
+        required: ['query'],
+        input: (a, client) => withZohoConnection(a, client, 'query'),
+      },
+      get: {
+        procedure: 'zohoCrm.getRecord',
+        summary: 'one full record',
+        required: ['moduleApiName', 'recordId'],
+        input: (a, client) => withZohoConnection(a, client, 'moduleApiName', 'recordId', 'fields'),
+      },
+    },
+  },
+  {
+    name: 'zoho_crm_records_write',
+    kind: 'write',
+    description:
+      'Create, update, upsert or delete records in the connected Zoho CRM (leads, contacts, deals, accounts, custom modules), up to 100 per call, and add notes. ' +
+      'Records use Zoho field API names, e.g. { "Last_Name": "Smith", "Email": "a@b.com", "Lead_Status": "New" }; picklist values must match exactly (integrations_read zoho_fields). ' +
+      'The result has one entry per record (success, id, or the Zoho error code and field), so partial failures are visible. ' +
+      'delete moves records to the Zoho recycle bin; confirm with the user before deleting or bulk-updating.',
+    required: ['moduleApiName'],
+    properties: {
+      connectionId: zohoConnection,
+      moduleApiName: zohoModule,
+      records: {
+        type: 'array',
+        items: { type: 'object' },
+        description: 'For create / update / upsert: up to 100 records. update needs "id" on each record.',
+      },
+      duplicateCheckFields: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'For upsert: fields that identify an existing record, e.g. ["Email"]. Default: the module\'s own duplicate check.',
+      },
+      recordIds: { type: 'array', items: { type: 'string' }, description: 'For delete: up to 100 record ids.' },
+      recordId: { type: 'string', description: 'For add_note: the record to attach the note to.' },
+      title: { type: 'string', description: 'For add_note.' },
+      content: { type: 'string', description: 'For add_note.' },
+      triggerWorkflow: zohoWorkflow,
+      orgId,
+    },
+    actions: {
+      create: {
+        procedure: 'zohoCrm.writeRecords',
+        summary: 'create records',
+        required: ['records'],
+        input: async (a, client) => ({
+          ...(await withZohoConnection(a, client, 'moduleApiName', 'records', 'triggerWorkflow')),
+          operation: 'create',
+        }),
+      },
+      update: {
+        procedure: 'zohoCrm.writeRecords',
+        summary: 'update records by id (only the fields given change)',
+        required: ['records'],
+        input: async (a, client) => ({
+          ...(await withZohoConnection(a, client, 'moduleApiName', 'records', 'triggerWorkflow')),
+          operation: 'update',
+        }),
+      },
+      upsert: {
+        procedure: 'zohoCrm.writeRecords',
+        summary: 'insert or update by duplicateCheckFields; each result says insert or update',
+        required: ['records'],
+        input: async (a, client) => ({
+          ...(await withZohoConnection(a, client, 'moduleApiName', 'records', 'duplicateCheckFields', 'triggerWorkflow')),
+          operation: 'upsert',
+        }),
+      },
+      delete: {
+        procedure: 'zohoCrm.deleteRecords',
+        summary: 'delete records (confirm first)',
+        required: ['recordIds'],
+        input: (a, client) => withZohoConnection(a, client, 'moduleApiName', 'recordIds', 'triggerWorkflow'),
+      },
+      add_note: {
+        procedure: 'zohoCrm.addNote',
+        summary: 'attach a note to a record',
+        required: ['recordId', 'title', 'content'],
+        input: (a, client) => withZohoConnection(a, client, 'moduleApiName', 'recordId', 'title', 'content'),
       },
     },
   },

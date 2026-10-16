@@ -434,6 +434,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"The bot did not reply on a channel"** → \`get_agent_channels\` → \`workspace_read\` action=logs (then log_timeline) → for Messenger/Instagram \`meta_pages_read\` check_subscriptions; for WhatsApp \`get_whatsapp_ai_rules\`.
 - **"SMS number / email channel"** → \`sms_numbers_read\` / \`sms_numbers_write\`; \`email_channel_read\` / \`email_channel_write\` (create_domain → user adds DNS records → verify_domain → create_inbox).
 - **"Calendly / Outlook / Zoho"** → \`integrations_read\` / \`integrations_write\` (the first OAuth login is done by the user on the dashboard).
+- **"Zoho leads / contacts / deals: list, search, create, update, delete"** → \`zoho_crm_records_read\` (list, search, COQL query, get) / \`zoho_crm_records_write\` (create, update, upsert, delete, add_note; up to 100 per call). Field API names and picklist values: \`integrations_read\` zoho_fields.
 - **"Same customer on two channels / customer history"** → \`contacts_read\` / \`contacts_write\`.
 - **Before a large agent edit** → \`agent_backups_write\` action=create. **"Undo that / go back"** → \`agent_backups_read\` → \`agent_backups_write\` restore or revert_prompt.
 - **"Tool that runs code / copy this tool to other agents"** → \`code_tools\` (validate → run → save) / \`tool_sharing\`.
