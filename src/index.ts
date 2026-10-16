@@ -19,12 +19,7 @@ import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
-import {
-  classifyToolResult,
-  installTelemetryExitHooks,
-  printTelemetryNoticeOnce,
-  recordToolCall,
-} from './telemetry.js';
+import { installTelemetryExitHooks, printTelemetryNoticeOnce, trackToolCall } from './telemetry.js';
 import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
 import {
   getActiveClient,
@@ -6739,21 +6734,19 @@ const handleCallTool = async (request: CallToolRequest) => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const startedAt = performance.now();
   const result = await handleCallTool(request);
-  let config = null;
+  // Only cheap reads happen here; trackToolCall defers all telemetry work until after the result is returned.
   try {
-    config = getActiveConfig();
+    const client = server.getClientVersion();
+    trackToolCall(getActiveConfig(), result, {
+      tool: request.params.name,
+      durationMs: performance.now() - startedAt,
+      transport: options?.hosted ? 'hosted' : 'stdio',
+      clientName: client?.name,
+      clientVersion: client?.version,
+    });
   } catch {
-    // No request context (should not happen) — skip telemetry for this call.
+    // Telemetry must never affect a tool call.
   }
-  const client = server.getClientVersion();
-  recordToolCall(config, {
-    tool: request.params.name,
-    ...classifyToolResult(result),
-    durationMs: performance.now() - startedAt,
-    transport: options?.hosted ? 'hosted' : 'stdio',
-    clientName: client?.name,
-    clientVersion: client?.version,
-  });
   return result;
 });
 

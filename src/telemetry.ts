@@ -8,11 +8,16 @@
  * CONVOCORE_TELEMETRY_DEBUG=1 prints events to stderr instead of sending them.
  *
  * Events are batched in memory and POSTed to `${baseUrl}/mcp/telemetry` (the caller's own region),
- * authenticated with the caller's workspace secret. Sending never blocks or fails a tool call.
+ * authenticated with the caller's workspace secret.
+ *
+ * Performance contract: telemetry never adds latency to anything. Tool results are returned before
+ * any telemetry work runs (trackToolCall defers it with setImmediate), sending is fire-and-forget
+ * with a hard timeout, nothing awaits it except shutdown (capped at EXIT_FLUSH_TIMEOUT_MS), and every
+ * failure is swallowed.
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PACKAGE_VERSION } from './package-meta.js';
@@ -49,6 +54,8 @@ const FLUSH_INTERVAL_MS = 5_000;
 const FLUSH_AT = 50;
 const MAX_QUEUED_PER_TARGET = 500;
 const SEND_TIMEOUT_MS = 4_000;
+/** Shutdown waits at most this long for the last batch; it never holds a deploy or an exit longer. */
+export const EXIT_FLUSH_TIMEOUT_MS = 1_000;
 
 /** One id per server process; lets events from one session be grouped without identifying anyone. */
 const SESSION_ID = randomUUID();
@@ -79,20 +86,22 @@ function isTelemetryDebug(): boolean {
  */
 export function printTelemetryNoticeOnce(): void {
   if (!isTelemetryEnabled()) return;
-  try {
-    const dir = path.join(os.homedir(), '.convocore-mcp');
-    const marker = path.join(dir, 'telemetry-notice-shown');
-    if (existsSync(marker)) return;
-    console.error(
-      'Attention: convocore-mcp collects anonymous usage data (tool name, success, duration, client name).\n' +
-        'Tool arguments and results are never collected. Opt out with CONVOCORE_TELEMETRY=0.\n' +
-        'Learn more: https://github.com/Moe03/convocore-mcp#telemetry'
-    );
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(marker, new Date().toISOString());
-  } catch {
-    // Read-only home dir etc. — the notice is best effort.
-  }
+  // Async and not awaited: never delays startup.
+  const dir = path.join(os.homedir(), '.convocore-mcp');
+  const marker = path.join(dir, 'telemetry-notice-shown');
+  access(marker)
+    .catch(async () => {
+      console.error(
+        'Attention: convocore-mcp collects anonymous usage data (tool name, success, duration, client name).\n' +
+          'Tool arguments and results are never collected. Opt out with CONVOCORE_TELEMETRY=0.\n' +
+          'Learn more: https://github.com/Moe03/convocore-mcp#telemetry'
+      );
+      await mkdir(dir, { recursive: true });
+      await writeFile(marker, new Date().toISOString());
+    })
+    .catch(() => {
+      // Read-only home dir etc. — the notice is best effort.
+    });
 }
 
 /** Short error category from a tool result (`isError` or the `{ success: false, data: { errorType } }` shape). */
@@ -103,6 +112,26 @@ export function classifyToolResult(result: unknown): { success: boolean; errorTy
   if (!r?.isError && !looksFailed) return { success: true };
   const match = /"errorType":\s*"([a-z_]{1,40})"/.exec(text);
   return { success: false, errorType: match?.[1] || 'error' };
+}
+
+/**
+ * Record a finished tool call without touching the response path: only the timing and config are
+ * captured by the caller; classifying the result and queueing run on a later tick, after the result
+ * has been handed back to the MCP transport.
+ */
+export function trackToolCall(
+  config: ConvocoreConfig | null,
+  result: unknown,
+  event: Omit<ToolCallEvent, 'success' | 'errorType'>
+): void {
+  if (!config?.workspaceSecret || !isTelemetryEnabled()) return;
+  setImmediate(() => {
+    try {
+      recordToolCall(config, { ...event, ...classifyToolResult(result) });
+    } catch {
+      // Telemetry must never affect a tool call.
+    }
+  });
 }
 
 export function recordToolCall(config: ConvocoreConfig | null, event: ToolCallEvent): void {
@@ -156,7 +185,7 @@ export function recordToolCall(config: ConvocoreConfig | null, event: ToolCallEv
 }
 
 /** Sends every queued batch. Each target is sent independently; failures drop that batch silently. */
-export async function flushTelemetry(): Promise<void> {
+export async function flushTelemetry(timeoutMs = SEND_TIMEOUT_MS): Promise<void> {
   const batches = [...queues.values()]
     .filter((q) => q.events.length > 0)
     .map((q) => ({ url: q.url, headers: q.headers, events: q.events.splice(0) }));
@@ -165,13 +194,14 @@ export async function flushTelemetry(): Promise<void> {
   }
   if (batches.length === 0) return;
 
+  // allSettled: a failed or timed-out send is dropped, never thrown.
   await Promise.allSettled(
     batches.map((b) =>
       fetch(b.url, {
         method: 'POST',
         headers: b.headers,
         body: JSON.stringify({ events: b.events }),
-        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       }).then((res) => res.body?.cancel())
     )
   );
@@ -179,11 +209,11 @@ export async function flushTelemetry(): Promise<void> {
 
 let exitHooksInstalled = false;
 
-/** Flush what is queued before a graceful shutdown. */
+/** Flush what is queued before a graceful shutdown, holding the exit for at most EXIT_FLUSH_TIMEOUT_MS. */
 export function installTelemetryExitHooks(): void {
   if (exitHooksInstalled) return;
   exitHooksInstalled = true;
   process.once('beforeExit', () => {
-    void flushTelemetry();
+    void flushTelemetry(EXIT_FLUSH_TIMEOUT_MS).catch(() => {});
   });
 }

@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import {
   classifyToolResult,
+  EXIT_FLUSH_TIMEOUT_MS,
   flushTelemetry,
   isTelemetryEnabled,
   recordToolCall,
+  trackToolCall,
 } from '../dist/telemetry.js';
 
 const text = (payload) => ({ content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] });
@@ -87,5 +89,34 @@ describe('telemetry', () => {
     await flushTelemetry();
     delete process.env.CONVOCORE_TELEMETRY;
     assert.equal(received.length, 0);
+  });
+
+  it('does no telemetry work on the tool-call tick; it runs on a later tick', async () => {
+    received.length = 0;
+    delete process.env.CONVOCORE_TELEMETRY;
+    const config = { workspaceSecret: 'secret-2', apiRegion: 'eu-gcp', baseUrl };
+    trackToolCall(config, text({ ok: true }), { tool: 'list_agents', durationMs: 3, transport: 'hosted' });
+    await flushTelemetry(); // same tick: nothing queued yet
+    assert.equal(received.length, 0);
+    await new Promise((r) => setImmediate(r));
+    await flushTelemetry();
+    assert.equal(received.length, 1);
+    assert.equal(received[0].body.events[0].tool, 'list_agents');
+    assert.equal(received[0].body.events[0].success, true);
+  });
+
+  it('a hanging telemetry endpoint never holds shutdown past the cap, and never throws', async () => {
+    const hang = createServer(() => {}); // accepts, never answers
+    await new Promise((r) => hang.listen(0, '127.0.0.1', r));
+    try {
+      const config = { workspaceSecret: 's3', apiRegion: 'eu-gcp', baseUrl: `http://127.0.0.1:${hang.address().port}/v3` };
+      recordToolCall(config, { tool: 'x', success: true, durationMs: 1, transport: 'stdio' });
+      const started = Date.now();
+      await flushTelemetry(EXIT_FLUSH_TIMEOUT_MS);
+      assert.ok(Date.now() - started < EXIT_FLUSH_TIMEOUT_MS + 500, `took ${Date.now() - started}ms`);
+    } finally {
+      hang.closeAllConnections?.();
+      hang.close();
+    }
   });
 });

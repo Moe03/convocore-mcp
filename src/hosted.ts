@@ -39,7 +39,7 @@ import {
 } from './mcp-display-name.js';
 import { PACKAGE_VERSION } from './package-meta.js';
 import { pickForwardedApiHeaders } from './forwarded-api-headers.js';
-import { flushTelemetry } from './telemetry.js';
+import { EXIT_FLUSH_TIMEOUT_MS, flushTelemetry } from './telemetry.js';
 
 const PORT = Number(process.env.PORT || 3009);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -583,7 +583,8 @@ async function shutdown(): Promise<void> {
   for (const sessionId of [...sessions.keys()]) {
     await destroySession(sessionId);
   }
-  await flushTelemetry();
+  // Bounded: a slow telemetry endpoint can never hold up a deploy.
+  await flushTelemetry(EXIT_FLUSH_TIMEOUT_MS).catch(() => {});
   httpServer.close(() => process.exit(0));
 }
 
