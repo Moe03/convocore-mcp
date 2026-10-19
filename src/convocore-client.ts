@@ -200,6 +200,23 @@ function summarizeUiEngineSnapshot(snapshot: any | null): UiEngineMessageSummary
   });
 }
 
+/**
+ * Write responses echo the whole agent document, including its API keys. Mask them so they never end up in the
+ * model's context (reads such as get_agent are unchanged; nothing here needs the key back).
+ */
+const AGENT_SECRET_FIELDS = ['SECRET_API_KEY', 'VF_DIALOGUE_API_KEY', 'VF_PROJECT_API_KEY', 'VF_KB_API_KEY', 'igAccessToken'];
+
+function maskAgentSecrets<T>(response: T): T {
+  const data = (response as { data?: Record<string, unknown> } | null)?.data;
+  if (!data || typeof data !== 'object') return response;
+  const masked: Record<string, unknown> = { ...data };
+  for (const key of AGENT_SECRET_FIELDS) {
+    const value = masked[key];
+    if (typeof value === 'string' && value.length > 0) masked[key] = `${value.slice(0, 3)}…(hidden)`;
+  }
+  return { ...(response as object), data: masked } as T;
+}
+
 export class ConvocoreClient {
   private config: ConvocoreConfig;
 
@@ -285,10 +302,12 @@ export class ConvocoreClient {
    * Create a new agent
    */
   async createAgent(payload: CreateAgentPayload): Promise<ApiResponse<Agent>> {
-    return this.request<ApiResponse<Agent>>('/agents', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return maskAgentSecrets(
+      await this.request<ApiResponse<Agent>>('/agents', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    );
   }
 
   /**
@@ -305,10 +324,12 @@ export class ConvocoreClient {
     agentId: string,
     payload: UpdateAgentPayload
   ): Promise<ApiResponse<Agent>> {
-    return this.request<ApiResponse<Agent>>(`/agents/${agentId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+    return maskAgentSecrets(
+      await this.request<ApiResponse<Agent>>(`/agents/${agentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      })
+    );
   }
 
   /**
