@@ -29,6 +29,10 @@ export type ToolCallEvent = {
   tool: string;
   success: boolean;
   errorType?: string;
+  /** Short, redacted failure message (never tool arguments or results). Only on failures. */
+  errorMessage?: string;
+  /** The `action` argument of action-based tools (integrations_write → "assign_to_agent"). */
+  action?: string;
   durationMs: number;
   transport: TelemetryTransport;
   clientName?: string;
@@ -104,14 +108,31 @@ export function printTelemetryNoticeOnce(): void {
     });
 }
 
-/** Short error category from a tool result (`isError` or the `{ success: false, data: { errorType } }` shape). */
-export function classifyToolResult(result: unknown): { success: boolean; errorType?: string } {
+/** Strip anything that could identify a person or a record from a failure message, then cut it short. */
+export function redactErrorMessage(message: string): string {
+  return message
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '<email>')
+    .replace(/https?:\/\/[^\s"')]+/g, '<url>')
+    .replace(/\b[A-Za-z0-9_-]{20,}\b/g, '<id>')
+    .replace(/\+?\d[\d\s().-]{7,}\d/g, '<number>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
+/** Short error category + message from a tool result (`isError` or the `{ success: false, message, data: { errorType } }` shape). */
+export function classifyToolResult(result: unknown): { success: boolean; errorType?: string; errorMessage?: string } {
   const r = result as { isError?: boolean; content?: Array<{ type?: string; text?: string }> } | null;
   const text = r?.content?.[0]?.type === 'text' ? r.content[0].text || '' : '';
   const looksFailed = /"success":\s*false/.test(text.slice(0, 200));
   if (!r?.isError && !looksFailed) return { success: true };
   const match = /"errorType":\s*"([a-z_]{1,40})"/.exec(text);
-  return { success: false, errorType: match?.[1] || 'error' };
+  const msg = /"message":\s*"((?:[^"\\]|\\.){1,400})"/.exec(text)?.[1] ?? (r?.isError ? text.slice(0, 400) : '');
+  return {
+    success: false,
+    errorType: match?.[1] || 'error',
+    ...(msg ? { errorMessage: redactErrorMessage(msg) } : {}),
+  };
 }
 
 /**
@@ -122,7 +143,7 @@ export function classifyToolResult(result: unknown): { success: boolean; errorTy
 export function trackToolCall(
   config: ConvocoreConfig | null,
   result: unknown,
-  event: Omit<ToolCallEvent, 'success' | 'errorType'>
+  event: Omit<ToolCallEvent, 'success' | 'errorType' | 'errorMessage'>
 ): void {
   if (!config?.workspaceSecret || !isTelemetryEnabled()) return;
   setImmediate(() => {

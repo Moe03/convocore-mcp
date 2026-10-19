@@ -6,12 +6,28 @@
 import type { ConvocoreClient } from '../convocore-client.js';
 import { type ToolModule } from './helpers.js';
 import { buildRpcModule, pick, type RpcToolSpec } from './rpc-tools.js';
+import { zodSchema } from '../generated/schema-ref.js';
+import type { ZodSchemaKey } from '../generated/zod-schemas.js';
 
 const agentId = { type: 'string' } as const;
 const orgId = { type: 'string', description: 'Optional organization scope.' } as const;
 const connectionId = { type: 'string', description: 'Integration connection id (from integrations_read all_connections).' } as const;
 
 /** Integration types of the integrations hub (same list as vg-docker INTEGRATION_TYPES). */
+/** Types that can be assigned to an agent (google_drive is KB import only). */
+const INTEGRATION_SETTING_TYPES = [
+  'google_calendar',
+  'outlook_calendar',
+  'google_sheets',
+  'airtable',
+  'shopify',
+  'calendly',
+  'zoho_crm',
+  'gmail',
+  'outlook_mail',
+  'zoho_mail',
+] as const;
+
 const INTEGRATION_TYPES = [
   'google_calendar',
   'outlook_calendar',
@@ -167,17 +183,23 @@ const specs: RpcToolSpec[] = [
       'gmail / outlook_mail / zoho_mail (the agent answers that inbox): { connectionId, whenToReply? (always | keywords | sentiment | manual), replyDelayMinutes?, replyRule?, humanNotifyRule?, replyLength? (short | medium | long | auto), replyTone?, keywords?, ignoreKeywords?, humanTakeoverEnabled?, humanTakeoverTimeoutMinutes?, notifyWorkspaceOwners? } — also starts inbound notifications. ' +
       'Get ids from integrations_read (all_connections, resources). After assigning, verify with integrations_read agent_integrations and integrations_test.',
     properties: {
-      agentId,
+      agentId: { type: 'string', description: 'For assign_to_agent / remove_from_agent / calendly_remove_agent / zoho_save_agent_config / zoho_remove_agent: the agent.' },
       agentIds: { type: 'array', items: { type: 'string' }, description: 'For calendly_assign_agents.' },
       connectionId,
       type: { type: 'string', enum: [...INTEGRATION_TYPES], description: 'For assign_to_agent / remove_from_agent.' },
-      settings: { type: 'object', description: 'For assign_to_agent / remove_from_agent: see the shapes above.' },
+      settings: {
+        description: 'For assign_to_agent / remove_from_agent: the shape for the chosen type (assign) — each option is titled with its type.',
+        anyOf: INTEGRATION_SETTING_TYPES.flatMap((t) => [
+          { title: `${t} assign`, ...zodSchema(`integration.${t}.assign` as ZodSchemaKey) },
+          { title: `${t} remove`, ...zodSchema(`integration.${t}.remove` as ZodSchemaKey) },
+        ]),
+      },
       selectedEventTypes: { type: 'array', items: { type: 'object' }, description: 'For calendly_save_event_types: event type objects from integrations_read.' },
       config: { type: 'object', description: 'Zoho agent sync config (shape as returned by zoho_agent_config / zoho_auto_configure).' },
       moduleApiNames: { type: 'array', items: { type: 'string' }, description: 'For zoho_auto_configure: up to 5 modules.' },
       instructions: { type: 'string', description: 'For zoho_auto_configure: what the sync should do, in plain words.' },
-      phone: { type: 'string' },
-      email: { type: 'string' },
+      phone: { type: 'string', description: 'For zoho_test_lookup: a phone number to look the person up by.' },
+      email: { type: 'string', description: 'For zoho_test_lookup: an email to look the person up by.' },
       custom: { type: 'object', description: 'For zoho_test_lookup: extra lookup values.' },
       orgId,
     },
@@ -280,6 +302,53 @@ const specs: RpcToolSpec[] = [
         procedure: 'integrationsHub.testAgentTool',
         summary: 'run one tool with args, as the agent would',
         input: (a) => ({ ...pick(a, 'agentId', 'toolId', 'toolName', 'args', 'orgId'), mode: 'run' }),
+      },
+    },
+  },
+  {
+    name: 'agency_branding',
+    kind: 'write',
+    description:
+      "Brand the caller's own whitelabel agency (client portal + login page), like the dashboard Agency settings. Never another agency; whitelabel clients cannot use it. " +
+      'get: current branding, login page and domain status (secrets and provider keys are never returned). ' +
+      'update_branding { branding }: only the fields sent change — name, logoUrl (round avatar), darkLogoUrl, wideLogoUrl, wideLogoDarkUrl, faviconUrl, brandingText (markdown), primaryColorHex (#RRGGBB, builds the whole palette), themeType (light | dark), themeVariant (default | bordered | flat | faded), themeColorUsage (gradient | colorful | plain), googleFontStack (Google Fonts families in fallback order, e.g. ["Rubik","Almarai"] = Rubik for Latin/digits, Almarai for Arabic), googleFontWeights (default [400,500,700]), customCSS, defaultLanguage (e.g. "ar" — also sets right-to-left), allowedLanguages, mainWebsite, supportEmail, tosPage, privacyPolicyPage, enableClientSignup, disablePasswordLogin. All URLs must be https. ' +
+      'update_login_page { loginPage }: merges into the login page — layout (centered | split), mediaSide (start | end: logical, start = left in LTR / right in RTL), mediaUrl, mediaFit (cover | contain), headline (≤120), subtext (≤300), textPlacement (overlay | below), background { type: theme | color | gradient | image, color, from, to, angle 0-360, imageUrl }, card { style: elevated | bordered | flat | glass, radius: sm | md | lg }, mobileMedia (stack | hide), logo (square | wide | none). Split layout without mediaUrl shows a gradient from the primary colour. reset: true clears it. ' +
+      'upload_asset { kind, sourceUrl | base64 }: copies an image onto the Convocore CDN and returns its URL (then pass it to update_branding / update_login_page). kinds: logo, dark_logo, wide_logo, wide_logo_dark (≤1 MB png/jpg/webp/svg), favicon (≤256 KB png/ico/svg), login_media, login_background (≤2 MB webp/png/jpg/svg). ' +
+      'Custom domains are claimed and verified on the dashboard only. Confirm the brand values with the user before changing a live portal.',
+    properties: {
+      branding: { ...zodSchema('agencyBrandingPatch'), description: 'For update_branding: only the fields to change.' },
+      loginPage: { ...zodSchema('agencyLoginPagePatch'), description: 'For update_login_page: only the login page fields to change (merged).' },
+      reset: { type: 'boolean', description: 'For update_login_page: clear the login page customisation.' },
+      kind: {
+        type: 'string',
+        enum: ['logo', 'dark_logo', 'wide_logo', 'wide_logo_dark', 'favicon', 'login_media', 'login_background'],
+        description: 'For upload_asset.',
+      },
+      sourceUrl: { type: 'string', description: 'For upload_asset: public https URL of the image.' },
+      base64: { type: 'string', description: 'For upload_asset: the image as base64 (alternative to sourceUrl).' },
+    },
+    actions: {
+      get: {
+        procedure: 'agencyBranding.get',
+        summary: 'current branding, login page and domain status',
+        input: () => ({}),
+      },
+      update_branding: {
+        procedure: 'agencyBranding.updateBranding',
+        summary: 'change logos, colour, fonts, language, CSS, links, signup/login options',
+        required: ['branding'],
+        input: (a) => pick(a, 'branding'),
+      },
+      update_login_page: {
+        procedure: 'agencyBranding.updateLoginPage',
+        summary: 'customise the client login page (layout, media, text, background, card)',
+        input: (a) => pick(a, 'loginPage', 'reset'),
+      },
+      upload_asset: {
+        procedure: 'agencyBranding.uploadAsset',
+        summary: 'put a logo / favicon / login image on the CDN and get its URL',
+        required: ['kind'],
+        input: (a) => pick(a, 'kind', 'sourceUrl', 'base64'),
       },
     },
   },

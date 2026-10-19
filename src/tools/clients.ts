@@ -2,6 +2,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { applyListMode, compactClientsListResult } from '../list-compact.js';
 import { getActiveClient } from '../request-context.js';
+import { zodSchema } from '../generated/schema-ref.js';
 import {
   type ToolModule,
   wrapHandler,
@@ -93,7 +94,7 @@ const tools: Tool[] = [
   {
     name: 'clients_write',
     description:
-      'Create/update/delete client accounts. Actions: create, update, delete. Pass clientData object for create/update. For reads use clients_read.',
+      'Create/update/delete whitelabel client accounts (people who log into the client portal). Actions: create, update, delete. clientData fields are listed and described in the schema: login (email, dashboardPassword), which agents they see (widgetIDs), portal tabs (canAccess), channels / integrations they may use, org membership, permissions and notifications. For reads use clients_read.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,
@@ -109,8 +110,9 @@ const tools: Tool[] = [
           description: 'Required for delete; recommended for update.',
         },
         clientData: {
-          type: 'object',
-          description: 'Client fields for create/update.',
+          ...zodSchema('clientWrite'),
+          description:
+            'Client fields for create/update (from the main ClientModelSchema; IDs, owner and timestamps are set by the server). create needs at least name and email; update sends only the fields to change.',
         },
       },
       required: ['action'],

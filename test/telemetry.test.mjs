@@ -7,6 +7,7 @@ import {
   flushTelemetry,
   isTelemetryEnabled,
   recordToolCall,
+  redactErrorMessage,
   trackToolCall,
 } from '../dist/telemetry.js';
 
@@ -36,12 +37,26 @@ describe('telemetry', () => {
     assert.deepEqual(classifyToolResult(text({ agents: [] })), { success: true });
     assert.deepEqual(
       classifyToolResult(text({ success: false, message: 'x', data: { errorType: 'api_request_error' } })),
-      { success: false, errorType: 'api_request_error' }
+      { success: false, errorType: 'api_request_error', errorMessage: 'x' }
     );
     assert.deepEqual(classifyToolResult({ isError: true, content: [{ type: 'text', text: 'nope' }] }), {
       success: false,
       errorType: 'error',
+      errorMessage: 'nope',
     });
+  });
+
+  it('failure messages are redacted and short', () => {
+    const r = classifyToolResult(
+      text({
+        success: false,
+        message: 'Zoho failed for jane.doe@acme.com at https://acme.com/x agent 0GHozIUptPixOJDdXWw8 phone +20 100 123 4567: bad field',
+        data: { errorType: 'api_request_error' },
+      })
+    );
+    assert.ok(!/@|https?:|0GHozIUptPixOJDdXWw8|4567/.test(r.errorMessage), r.errorMessage);
+    assert.match(r.errorMessage, /bad field/);
+    assert.ok(redactErrorMessage('x'.repeat(500)).length <= 200);
   });
 
   it('is on by default and off with CONVOCORE_TELEMETRY=0 or DO_NOT_TRACK=1', () => {

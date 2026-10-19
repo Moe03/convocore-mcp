@@ -1,6 +1,6 @@
 {
   "name": "convocore-mcp",
-  "version": "2.6.13",
+  "version": "2.6.14",
   "description": "MCP Server for Convocore AI Agents - run via npx in Claude Desktop, Cursor, and any MCP-compatible host",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,8 @@
     "test": "pnpm run build && node --test test/*.test.mjs",
     "smoke:hosted": "node scripts/smoke-hosted.mjs",
     "prepublishOnly": "pnpm run build",
-    "publish:npm": "node scripts/publish-npm.mjs"
+    "publish:npm": "node scripts/publish-npm.mjs",
+    "sync:schemas": "node scripts/sync-zod-schemas.mjs"
   },
   "keywords": [
     "mcp",

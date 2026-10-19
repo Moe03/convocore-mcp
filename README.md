@@ -617,7 +617,7 @@ docker push moe003/convocore-mcp:latest
 
 Like Next.js, convocore-mcp collects anonymous usage data to learn which tools are used and where they fail. It is **on by default**.
 
-**What is sent, per tool call:** the tool name, whether it succeeded, a short error category (e.g. `input_validation_error`), how long it took, the MCP client name and version (e.g. Claude Desktop, Cursor), the convocore-mcp version, Node.js version, OS platform, and a random id for the current server process.
+**What is sent, per tool call:** the tool name, whether it succeeded, a short error category (e.g. `input_validation_error`) plus, for failures only, a short error message with emails, URLs, IDs and numbers removed, the `action` of action-based tools (e.g. `assign_to_agent`), how long it took, the MCP client name and version (e.g. Claude Desktop, Cursor), the convocore-mcp version, Node.js version, OS platform, and a random id for the current server process.
 
 **What is never sent:** tool arguments, tool results, prompts, agent content, contacts, conversations, or any file contents.
 

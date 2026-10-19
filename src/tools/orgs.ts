@@ -7,6 +7,7 @@ import {
   compactOrgsListResult,
 } from '../list-compact.js';
 import { getActiveClient } from '../request-context.js';
+import { zodSchema } from '../generated/schema-ref.js';
 import {
   type ToolModule,
   wrapHandler,
@@ -174,16 +175,19 @@ const tools: Tool[] = [
           type: 'string',
           enum: ['create', 'update', 'delete', 'assign_agent'],
         },
-        orgId: { type: 'string' },
-        agentId: { type: 'string', description: 'For assign_agent.' },
-        name: { type: 'string', description: 'For create.' },
-        email: { type: 'string' },
-        squarePhotoURL: { type: 'string' },
-        org: { type: 'object', description: 'Fields to patch for action=update.' },
+        orgId: { type: 'string', description: 'Org id (orgs_read list / search). Required for update, delete and assign_agent.' },
+        agentId: { type: 'string', description: 'For assign_agent: the agent to give to (or take from) the org.' },
+        name: { type: 'string', description: 'For create: org display name (Clients page card).' },
+        email: { type: 'string', description: 'For create: org contact email.' },
+        squarePhotoURL: { type: 'string', description: 'For create: org logo URL (https), shown as a round avatar.' },
+        org: {
+          ...zodSchema('orgWrite'),
+          description: 'For action=update: org fields to change (from the main org schema; only what you send changes).',
+        },
         assignAction: {
           type: 'string',
           enum: ['assign', 'unassign'],
-          description: 'For assign_agent.',
+          description: 'For assign_agent: assign gives the org access to the agent, unassign removes it.',
         },
       },
       required: ['action'],

@@ -392,7 +392,8 @@ export class ConvocoreClient {
   async getAgentCustomCSS(agentId: string): Promise<string> {
     const result = await this.getAgent(agentId);
     const agent: any = (result as any)?.data ?? result;
-    const css = agent?.customCSS;
+    // The stored field is ADVANCED_customCSS (the API rejects a plain `customCSS` key). Fall back to the legacy name.
+    const css = agent?.ADVANCED_customCSS ?? agent?.customCSS;
     return typeof css === 'string' ? css : '';
   }
 
@@ -400,7 +401,7 @@ export class ConvocoreClient {
    * Replace the agent's customCSS field. Pass an empty string to clear it.
    */
   async updateAgentCustomCSS(agentId: string, customCSS: string): Promise<ApiResponse<Agent>> {
-    return this.updateAgent(agentId, { agent: { customCSS } });
+    return this.updateAgent(agentId, { agent: { ADVANCED_customCSS: customCSS } });
   }
 
   /**
@@ -453,7 +454,8 @@ export class ConvocoreClient {
     limit: number = 20,
     cursor?: string
   ): Promise<any> {
-    const cappedLimit = Math.min(Math.max(limit || 20, 1), 20);
+    // The API clamps to the plan's page size (paid 100 / free 50), so ask for what the caller wants up to 100.
+    const cappedLimit = Math.min(Math.max(limit || 20, 1), 100);
     const params = new URLSearchParams({
       limit: String(cappedLimit),
     });
@@ -574,7 +576,8 @@ export class ConvocoreClient {
     let nextListCursor: string | null = null;
 
     while (hasMore && listCandidates.length < maxScan) {
-      const pageLimit = Math.min(20, maxScan - listCandidates.length);
+      // Pages are cursor-chained (can't run in parallel), so use the biggest page the API allows: 200 rows = 2 requests, not 10.
+      const pageLimit = Math.min(100, maxScan - listCandidates.length);
       const page = await this.listConversations(agentId, 1, pageLimit, cursor);
       const rows: any[] = Array.isArray(page?.data)
         ? page.data
@@ -618,13 +621,10 @@ export class ConvocoreClient {
     const failed: Array<{ id: string; error: string }> = [];
 
     if (needsDetail || filters.hasUserName != null) {
-      // Fetch in chunks of 50
-      for (let i = 0; i < ids.length; i += 50) {
-        const chunk = ids.slice(i, i + 50);
-        const bulk = await this.getConversationsBulk(agentId, chunk);
-        detailed.push(...bulk.data);
-        failed.push(...bulk.failed);
-      }
+      // One bulk call: getConversationsBulk already fetches with bounded concurrency, so chunking only serialised the work.
+      const bulk = await this.getConversationsBulk(agentId, ids);
+      detailed.push(...bulk.data);
+      failed.push(...bulk.failed);
     } else {
       // List-only projection (summary/vars usually missing on PG list)
       detailed = cheapFiltered.map((row) => this.projectConversationBulkRow(row));
@@ -1223,13 +1223,17 @@ export class ConvocoreClient {
     let latestJob = initialJob;
     let timedOut = false;
 
+    // Fast pages finish in well under a second: check early and back off, instead of a fixed 2 s before every poll.
+    const pollDelaysMs = [300, 500, 700, 1_000, 1_500, 2_000];
+    let polls = 0;
     while (!latestJob.done && !latestJob.failed && !latestJob.isCancelled) {
       if (Date.now() >= deadline) {
         timedOut = true;
         break;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await new Promise((resolve) => setTimeout(resolve, pollDelaysMs[Math.min(polls, pollDelaysMs.length - 1)]));
+      polls += 1;
       const jobResult = await this.getCrawlerJob(workspaceId, jobId);
       if (jobResult.data) {
         latestJob = jobResult.data;

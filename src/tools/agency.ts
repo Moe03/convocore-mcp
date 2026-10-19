@@ -22,7 +22,7 @@ const tools: Tool[] = [
   {
     name: 'agency_read',
     description:
-      'Get the current agency account for this workspace secret. Returns agency profile/settings. Does not modify — use agency_write. Distinct from orgs_read (child organizations) and clients_read (end-user client accounts).',
+      'Get the current agency account for this workspace secret (raw document). For branding (logo, colours, fonts, language, login page) use agency_branding get — it is typed and never returns secrets. Distinct from orgs_read (child organizations) and clients_read (end-user client accounts).',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -34,7 +34,7 @@ const tools: Tool[] = [
   {
     name: 'agency_write',
     description:
-      'Create/update (upsert) or delete the agency account. Actions: upsert, delete. Requires agency-scoped auth. For org/client CRUD use orgs_write / clients_write.',
+      'Create (upsert with a name) or delete the agency account. To brand it (logo, colour, fonts, language, login page, assets) use agency_branding instead — it validates fields. Domain claims, verification flags, secrets and provider keys cannot be changed here (domains are verified on the dashboard). For org/client CRUD use orgs_write / clients_write.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: true,

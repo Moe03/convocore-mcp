@@ -19,6 +19,8 @@ import { z } from 'zod';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig } from './config.js';
+import { zodFieldSummary, zodSchema } from './generated/schema-ref.js';
+import { AGENT_UPDATE_ALLOWED_KEYS, AGENT_UPDATE_FORBIDDEN_KEYS, ZOD_SCHEMAS } from './generated/zod-schemas.js';
 import { installTelemetryExitHooks, printTelemetryNoticeOnce, trackToolCall } from './telemetry.js';
 import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
 import {
@@ -2045,7 +2047,12 @@ function readAgentTextField(
     };
   }
   return {
-    text: typeof agent.customCSS === 'string' ? agent.customCSS : '',
+    text:
+      typeof agent.ADVANCED_customCSS === 'string'
+        ? agent.ADVANCED_customCSS
+        : typeof agent.customCSS === 'string'
+          ? agent.customCSS
+          : '',
     label: 'customCSS',
   };
 }
@@ -2067,7 +2074,7 @@ function applyPatchToAgentObject(
     patch.proactiveMessage = updatedText;
     return patch;
   }
-  patch.customCSS = updatedText;
+  patch.ADVANCED_customCSS = updatedText;
   return patch;
 }
 
@@ -3284,9 +3291,11 @@ const coreTools: Tool[] = [
             'Default false: toolsIds in a nodes patch are unioned with the live list. Set true only to intentionally remove tools.',
         },
         additionalConfig: {
-          type: 'object',
+          ...zodFieldSummary('agentAdvancedFields', 'update_agent additionalConfig (full types and descriptions are there)'),
           description:
-            'Escape hatch for advanced fields. Do not put the main prompt here. Never set ownerID.',
+            'Extra agent fields: same as update_agent additionalConfig (see that tool for each field\'s type and meaning). Fields: ' +
+            Object.keys((ZOD_SCHEMAS.agentAdvancedFields as any).properties).join(', ') +
+            '. Do not put the main prompt here. Unknown fields are rejected up front with the valid names.',
         },
       },
       required: ['title'],
@@ -3404,8 +3413,11 @@ const coreTools: Tool[] = [
         branding: { type: 'string' },
         chatBgURL: { type: 'string', format: 'uri' },
         additionalConfig: {
-          type: 'object',
-          description: 'Merged last into agent root with safeguards. Keys starting with vg_ (and core template keys) are ignored.',
+          ...zodFieldSummary('agentAdvancedFields', 'update_agent additionalConfig (full types and descriptions are there)'),
+          description:
+            'Extra agent fields, same as update_agent additionalConfig; merged last with safeguards (keys starting with vg_ and core template keys are ignored). Fields: ' +
+            Object.keys((ZOD_SCHEMAS.agentAdvancedFields as any).properties).join(', ') +
+            '.',
         },
       },
       required: [],
@@ -3485,9 +3497,9 @@ const coreTools: Tool[] = [
             'Node patch. MCP merges onto the current graph by node id so partial updates (e.g. toolsIds) cannot blank nodes[0].instructions. Prefer systemPrompt for prompt writes.',
         },
         additionalConfig: {
-          type: 'object',
+          ...zodSchema('agentAdvancedFields'),
           description:
-            'Escape hatch for advanced fields. Do not put the main prompt here. Never set ownerID.',
+            'Every other agent field the API accepts, typed from the main agent schema. Send only what changes: nested objects (nodesSettings, vg_kb_llm, ui…) are deep-merged into the current value, so existing settings are kept. Do not put the main prompt here (use systemPrompt / patch_agent_prompt). Unknown fields are rejected up front with the valid names.',
         },
       },
       required: ['agentId'],
@@ -5118,6 +5130,45 @@ const HOST_LOCAL_TOOLS = new Set([
   'import_file_to_kb',
 ]);
 
+
+/**
+ * additionalConfig is the only free-form entry point of update_agent. The backend answers unknown keys with a 400
+ * ("unknown field"), which models then retry blindly. Check against the backend allowlist first and explain.
+ */
+const AGENT_KEY_ALIASES: Record<string, string> = {
+  customCSS: 'ADVANCED_customCSS',
+  customCss: 'ADVANCED_customCSS',
+  css: 'ADVANCED_customCSS',
+  prompt: 'nodes[0].instructions (use systemPrompt / patch_agent_prompt)',
+  systemPrompt: 'nodes[0].instructions (use the systemPrompt parameter, not additionalConfig)',
+  instructions: 'nodes[0].instructions (use systemPrompt / patch_agent_prompt)',
+  name: 'title',
+  model: 'modelId or nodes[].llmConfig.modelId',
+  temperature: 'nodes[].llmConfig.temperature',
+};
+
+function assertAgentUpdateKeys(config: Record<string, unknown> | undefined, field = 'additionalConfig'): void {
+  if (!config) return;
+  const allowed = new Set(AGENT_UPDATE_ALLOWED_KEYS);
+  const forbidden = new Set(AGENT_UPDATE_FORBIDDEN_KEYS);
+  const issues: z.ZodIssue[] = [];
+  for (const key of Object.keys(config)) {
+    if (allowed.has(key) && !forbidden.has(key)) continue;
+    const alias = AGENT_KEY_ALIASES[key];
+    const near = [...allowed].filter((k) => k.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(k.toLowerCase())).slice(0, 5);
+    issues.push({
+      code: 'custom',
+      path: [field, key],
+      message: forbidden.has(key)
+        ? `"${key}" can never be set through update_agent.`
+        : `"${key}" is not an agent field the API accepts.` +
+          (alias ? ` Use ${alias}.` : near.length ? ` Did you mean: ${near.join(', ')}?` : '') +
+          ' Valid fields are listed in the additionalConfig schema.',
+    });
+  }
+  if (issues.length) throw new z.ZodError(issues);
+}
+
 // Create MCP server (shared by stdio + hosted transports)
 export function createMcpServer(options?: { name?: string; version?: string; hosted?: boolean }): Server {
 const server = new Server(
@@ -5318,6 +5369,7 @@ const handleCallTool = async (request: CallToolRequest) => {
       case 'create_agent': {
         const validated = CreateAgentSchema.parse(args);
         const { additionalConfig, ...agentFields } = validated;
+        assertAgentUpdateKeys(additionalConfig);
         const payload = {
           agent: stripDeprecatedAgentFields(
             normalizeNodesEnabledAgentPayload({
@@ -5422,6 +5474,7 @@ const handleCallTool = async (request: CallToolRequest) => {
       case 'update_agent': {
         const validated = UpdateAgentSchema.parse(args);
         const { agentId, additionalConfig, allowRemoveTools, ...updateFields } = validated;
+        assertAgentUpdateKeys(additionalConfig);
         const existing = unwrapAgentRecord(await getActiveClient().getAgent(agentId));
         const existingId =
           typeof existing.ID === 'string'
@@ -5444,6 +5497,8 @@ const handleCallTool = async (request: CallToolRequest) => {
         }
 
         const nestedMergeKeys = [
+          // nodesSettings holds tool overrides, voice options and runtime flags: patch it, never replace it.
+          'nodesSettings',
           'voiceConfig',
           'funnelConfig',
           'leadCollectionRules',
@@ -6737,8 +6792,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // Only cheap reads happen here; trackToolCall defers all telemetry work until after the result is returned.
   try {
     const client = server.getClientVersion();
+    const rawAction = (request.params.arguments as { action?: unknown } | undefined)?.action;
     trackToolCall(getActiveConfig(), result, {
       tool: request.params.name,
+      ...(typeof rawAction === 'string' && /^[a-z0-9_]{1,40}$/.test(rawAction) ? { action: rawAction } : {}),
       durationMs: performance.now() - startedAt,
       transport: options?.hosted ? 'hosted' : 'stdio',
       clientName: client?.name,
@@ -6753,7 +6810,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   return server;
 }
 
-export { tools };
+export { tools, assertAgentUpdateKeys };
 
 // Start stdio transport ONLY for local npx / `node dist/index.js`.
 // Hosted Docker uses dist/hosted.js — auth is Bearer per request, no WORKSPACE_SECRET at boot.
