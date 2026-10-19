@@ -52,3 +52,24 @@ describe('agent write responses', () => {
     }
   });
 });
+
+describe('secret masking', () => {
+  it('masks token / secret / api key / password strings at any depth, not counters', async () => {
+    const { maskSecretFields } = await import('../dist/convocore-client.js');
+    const out = maskSecretFields({
+      title: 'T',
+      whatsappToken: 'EAAFBn6bMaNoBSR2',
+      SECRET_API_KEY: 'vg_abc123',
+      maxTokensUsage: 5,
+      vg_maxTokens: 1024,
+      nested: { igAccessToken: 'IGQ123', serverUrlSecret: 'shh', ok: 'yes' },
+      list: [{ password: 'pw' }],
+    });
+    const text = JSON.stringify(out);
+    for (const leaked of ['EAAFBn6bMaNoBSR2', 'vg_abc123', 'IGQ123', 'shh', '"pw"']) assert.ok(!text.includes(leaked), leaked);
+    assert.equal(out.title, 'T');
+    assert.equal(out.maxTokensUsage, 5);
+    assert.equal(out.vg_maxTokens, 1024);
+    assert.equal(out.nested.ok, 'yes');
+  });
+});

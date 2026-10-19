@@ -201,20 +201,35 @@ function summarizeUiEngineSnapshot(snapshot: any | null): UiEngineMessageSummary
 }
 
 /**
- * Write responses echo the whole agent document, including its API keys. Mask them so they never end up in the
- * model's context (reads such as get_agent are unchanged; nothing here needs the key back).
+ * Agent documents carry API keys and channel tokens (WhatsApp, Instagram…). They must never end up in the model's
+ * context, so tool outputs mask every string field whose name says token / secret / api key / password, at any depth.
+ * Applied at the tool boundary only — internal merges keep working with the real document.
  */
-const AGENT_SECRET_FIELDS = ['SECRET_API_KEY', 'VF_DIALOGUE_API_KEY', 'VF_PROJECT_API_KEY', 'VF_KB_API_KEY', 'igAccessToken'];
+const SECRET_FIELD_NAME = /(token|secret|api_?key|password|private_?key)$/i;
+const NOT_SECRET_FIELD = /^(maxTokensUsage|tokensUsage|allTimeTriggers|maxTokens|vg_maxTokens|max_tokens)$/;
+
+/** Keep a 3-character prefix (to tell keys apart) only when the value is long enough that it reveals nothing. */
+function maskedValue(value: string): string {
+  return value.length > 16 ? `${value.slice(0, 3)}…(hidden)` : '(hidden)';
+}
+
+export function maskSecretFields<T>(value: T, depth = 0): T {
+  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => maskSecretFields(v, depth + 1)) as unknown as T;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    out[key] =
+      typeof v === 'string' && v.length > 0 && SECRET_FIELD_NAME.test(key) && !NOT_SECRET_FIELD.test(key)
+        ? maskedValue(v)
+        : maskSecretFields(v, depth + 1);
+  }
+  return out as T;
+}
 
 function maskAgentSecrets<T>(response: T): T {
-  const data = (response as { data?: Record<string, unknown> } | null)?.data;
+  const data = (response as { data?: unknown } | null)?.data;
   if (!data || typeof data !== 'object') return response;
-  const masked: Record<string, unknown> = { ...data };
-  for (const key of AGENT_SECRET_FIELDS) {
-    const value = masked[key];
-    if (typeof value === 'string' && value.length > 0) masked[key] = `${value.slice(0, 3)}…(hidden)`;
-  }
-  return { ...(response as object), data: masked } as T;
+  return { ...(response as object), data: maskSecretFields(data) } as T;
 }
 
 export class ConvocoreClient {

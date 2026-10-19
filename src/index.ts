@@ -22,7 +22,7 @@ import { getConfig } from './config.js';
 import { zodFieldSummary, zodSchema } from './generated/schema-ref.js';
 import { AGENT_UPDATE_ALLOWED_KEYS, AGENT_UPDATE_FORBIDDEN_KEYS, ZOD_SCHEMAS } from './generated/zod-schemas.js';
 import { installTelemetryExitHooks, printTelemetryNoticeOnce, trackToolCall } from './telemetry.js';
-import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
+import { ConvocoreApiRequestError, ConvocoreClient, maskSecretFields } from './convocore-client.js';
 import {
   getActiveClient,
   getActiveConfig,
@@ -5447,7 +5447,9 @@ const handleCallTool = async (request: CallToolRequest) => {
 
       case 'get_agent': {
         const validated = GetAgentSchema.parse(args);
-        const result = await getActiveClient().getAgent(validated.agentId);
+        const rawResult = await getActiveClient().getAgent(validated.agentId);
+        // API keys and channel tokens (WhatsApp, Instagram…) are masked: they have no business in the model's context.
+        const result = maskSecretFields(rawResult);
         const agentId =
           extractAgentIdFromPayload(result) ?? validated.agentId;
         const links = prototypeLinksForAgent(agentId);
