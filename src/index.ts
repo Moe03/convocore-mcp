@@ -5499,8 +5499,6 @@ const handleCallTool = async (request: CallToolRequest) => {
         }
 
         const nestedMergeKeys = [
-          // nodesSettings holds tool overrides, voice options and runtime flags: patch it, never replace it.
-          'nodesSettings',
           'voiceConfig',
           'funnelConfig',
           'leadCollectionRules',

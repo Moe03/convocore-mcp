@@ -1908,6 +1908,10 @@ export const ZOD_SCHEMAS = {
       "type": "boolean",
       "description": "Keep one AI-written summary note per conversation on the CRM record."
      },
+     "logTranscript": {
+      "type": "boolean",
+      "description": "Keep one Note per conversation with the actual messages (customer, AI agent and human team replies, including ones sent from the WhatsApp Business app or dashboard), updated in place. No AI cost."
+     },
      "instructions": {
       "type": "string",
       "maxLength": 50000,
