@@ -179,7 +179,7 @@ const specs: RpcToolSpec[] = [
       'Add, change or remove an integration on an agent, exactly like the dashboard. assign_to_agent also updates an existing setup (call it again with new settings); remove_from_agent removes it. ' +
       'settings by type — google_calendar / outlook_calendar: { connectionId, calendarId, calendarName?, timezone? ("Europe/London" or "GMT+1"), label?, description?, methods? (create-event, check-availability, lookup-events, update-event, delete-event), bookingMode? ("route" = caller picks one calendar, "union" = any free calendar), defaultCallerTimezone? ("" = same as calendar, "ask", or a zone), disableMeetLink? (google, in-person) } — up to 5 calendars per agent; remove one with { calendarId } or all with {}. ' +
       'google_sheets: { connectionId, sheetId, sheetTabName, method: "read" | "lookup" | "write", sheetName?, sheetDescription?, headerRowIndex?, headerDescriptions? {column: meaning}, identifierColumn?, identityFields? { phone, email, name, custom, customLabel } } — up to 5 sheets; remove one with { sheetId }. ' +
-      'airtable: { connectionId, baseId, tableId?, method?, fieldDescriptions?, identifierField? }. shopify: { connectionId }. calendly: { connectionId }. zoho_crm: { config } (draft it with zoho_auto_configure). ' +
+      'airtable: { connectionId, baseId, tableId?, method?, fieldDescriptions?, identifierField? }. shopify: { connectionId }. calendly: { connectionId }. zoho_crm: { config } (draft it with zoho_auto_configure; config.logTranscript keeps a note with the real messages, including human replies from WhatsApp/dashboard). ' +
       'gmail / outlook_mail / zoho_mail (the agent answers that inbox): { connectionId, whenToReply? (always | keywords | sentiment | manual), replyDelayMinutes?, replyRule?, humanNotifyRule?, replyLength? (short | medium | long | auto), replyTone?, keywords?, ignoreKeywords?, humanTakeoverEnabled?, humanTakeoverTimeoutMinutes?, notifyWorkspaceOwners? } — also starts inbound notifications. ' +
       'Get ids from integrations_read (all_connections, resources). After assigning, verify with integrations_read agent_integrations and integrations_test.',
     properties: {
@@ -195,7 +195,11 @@ const specs: RpcToolSpec[] = [
         ]),
       },
       selectedEventTypes: { type: 'array', items: { type: 'object' }, description: 'For calendly_save_event_types: event type objects from integrations_read.' },
-      config: { type: 'object', description: 'Zoho agent sync config (shape as returned by zoho_agent_config / zoho_auto_configure).' },
+      config: {
+        ...((zodSchema('integration.zoho_crm.assign').properties as Record<string, Record<string, unknown>>).config),
+        description:
+          'Zoho agent sync config (as returned by zoho_agent_config / zoho_auto_configure). To turn the message log on or off, read the current config, flip logTranscript, and save the whole config back.',
+      },
       moduleApiNames: { type: 'array', items: { type: 'string' }, description: 'For zoho_auto_configure: up to 5 modules.' },
       instructions: { type: 'string', description: 'For zoho_auto_configure: what the sync should do, in plain words.' },
       phone: { type: 'string', description: 'For zoho_test_lookup: a phone number to look the person up by.' },
