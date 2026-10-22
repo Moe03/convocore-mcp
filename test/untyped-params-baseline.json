@@ -29,6 +29,7 @@
  "import_twilio_number .payload",
  "integrations_test .args",
  "integrations_write .config",
+ "integrations_write .config.defaultValuesOnCreate",
  "integrations_write .custom",
  "integrations_write .selectedEventTypes[]",
  "integrations_write .settings.config.defaultValuesOnCreate",

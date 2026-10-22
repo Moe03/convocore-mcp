@@ -439,6 +439,7 @@ White-label CDN (\`cdn.yourcompany.com\`) is a paid add-on — default is \`cdn.
 - **"Same customer on two channels / customer history"** → \`contacts_read\` / \`contacts_write\`.
 - **Before a large agent edit** → \`agent_backups_write\` action=create. **"Undo that / go back"** → \`agent_backups_read\` → \`agent_backups_write\` restore or revert_prompt.
 - **"Tool that runs code / copy this tool to other agents"** → \`code_tools\` (validate → run → save) / \`tool_sharing\`.
+- **"Usage / credits / how much did agent X cost / which agents use the most / activity numbers"** → \`usage_read\` (start with action=overview; then top_agents, workspace_usage, agent_usage, agent_analytics, agents_analytics, clients_analytics). Never tell the user you cannot see usage or billing — check \`usage_read\` first. WhatsApp / SMS analytics: \`whatsapp_numbers_read\` / \`sms_numbers_read\`; call history: \`call_logs_read\`.
 - **"Credits / quota / team / provider keys"** → \`workspace_read\` / \`workspace_write\`.
 - **"When should the AI reply on WhatsApp / ignore some chats / only reply to X / reply only in working hours / pause the WhatsApp bot"** → \`get_whatsapp_ai_rules\` → \`update_whatsapp_ai_rules\` (phrases, AI rule, schedule, allow/deny list) or \`update_whatsapp_number_settings\` (\`aiPaused\`, coexistence). Not a prompt change.
 - **"Call campaign / dial this lead list"** → \`lead_groups_read\` → \`campaigns_write\` (create, then enable to start dialing). Progress: \`campaigns_read\`.

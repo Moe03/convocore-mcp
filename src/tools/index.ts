@@ -20,6 +20,7 @@ import { foldersModule } from './folders.js';
 import type { ToolHandler, ToolModule } from './helpers.js';
 import { kbExtrasModule } from './kb-extras.js';
 import { leadGroupsModule } from './lead-groups.js';
+import { usageModule } from './usage.js';
 import { leadsModule } from './leads.js';
 import { orgsModule } from './orgs.js';
 import { outboundModule } from './outbound.js';
@@ -47,6 +48,7 @@ const BASE_MODULES: ToolModule[] = [
   agentExtrasModule,
   dashboardChannelsModule,
   dashboardWorkspaceModule,
+  usageModule,
 ];
 
 function mergeModules(modules: ToolModule[]): {

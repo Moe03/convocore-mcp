@@ -54,6 +54,7 @@ const EXPECTED_DOMAIN_TOOLS = [
   'integrations_read',
   'integrations_write',
   'integrations_test',
+  'usage_read',
   'agency_branding',
   'zoho_crm_records_read',
   'zoho_crm_records_write',
