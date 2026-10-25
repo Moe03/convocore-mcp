@@ -194,6 +194,7 @@ const specs: RpcToolSpec[] = [
           { title: `${t} remove`, ...zodSchema(`integration.${t}.remove` as ZodSchemaKey) },
         ]),
       },
+      force: { type: 'boolean', description: 'For google_calendar_disconnect: disconnect even if agents still use the connection.' },
       selectedEventTypes: { type: 'array', items: { type: 'object' }, description: 'For calendly_save_event_types: event type objects from integrations_read.' },
       config: {
         ...((zodSchema('integration.zoho_crm.assign').properties as Record<string, Record<string, unknown>>).config),
@@ -237,6 +238,12 @@ const specs: RpcToolSpec[] = [
         summary: 'remove Calendly from an agent',
         required: ['agentId'],
         input: (a) => pick(a, 'agentId'),
+      },
+      google_calendar_disconnect: {
+        procedure: 'integrationsHub.disconnectGoogleCalendar',
+        summary: 'disconnect a Google Calendar account (confirm first; refused while agents use it unless force)',
+        required: ['connectionId'],
+        input: (a) => pick(a, 'connectionId', 'force', 'orgId'),
       },
       outlook_disconnect: {
         procedure: 'outlookCalendar.disconnect',
