@@ -31,6 +31,14 @@ export type ConversationBulkRow = {
   capturedVariables: Record<string, unknown> | null;
   userName: string | null;
   origin: unknown;
+  /** Human review notes (timeline), oldest first. */
+  reviewNotes: Array<{
+    id: string;
+    text: string;
+    createdAt: number;
+    authorName?: string | null;
+    authorEmail?: string | null;
+  }> | null;
 };
 
 export type QueryConversationsFilters = {
@@ -41,6 +49,10 @@ export type QueryConversationsFilters = {
   capturedVariableEquals?: { key: string; value: string };
   summaryContains?: string;
   hasUserName?: boolean;
+  /** true = only conversations that have review notes; false = only those without. */
+  hasNotes?: boolean;
+  /** Case-insensitive substring match on any review note text. */
+  noteContains?: string;
 };
 
 /** Normalize URL for KB skipExisting matching (strip hash, lowercase host). */
@@ -546,6 +558,7 @@ export class ConvocoreClient {
       capturedVariables: captured,
       userName: typeof doc.userName === 'string' ? doc.userName : null,
       origin: doc.origin ?? null,
+      reviewNotes: Array.isArray(doc.reviewNotes) ? doc.reviewNotes : null,
     };
   }
 
@@ -604,7 +617,9 @@ export class ConvocoreClient {
       filters.capturedVariableExists != null ||
       filters.capturedVariableEquals != null ||
       (typeof filters.summaryContains === 'string' && filters.summaryContains.length > 0) ||
-      filters.hasUserName != null;
+      filters.hasUserName != null ||
+      filters.hasNotes != null ||
+      (typeof filters.noteContains === 'string' && filters.noteContains.length > 0);
 
     const listCandidates: any[] = [];
     let cursor: string | undefined;
@@ -683,6 +698,15 @@ export class ConvocoreClient {
         const hay = (row.summary || '').toLowerCase();
         if (!hay.includes(needle)) return false;
       }
+      if (filters.hasNotes != null) {
+        const count = row.reviewNotes?.length ?? 0;
+        if (filters.hasNotes ? count === 0 : count > 0) return false;
+      }
+      if (filters.noteContains) {
+        const needle = filters.noteContains.toLowerCase();
+        const notes = row.reviewNotes ?? [];
+        if (!notes.some((n) => (n.text || '').toLowerCase().includes(needle))) return false;
+      }
       return true;
     });
 
@@ -710,6 +734,52 @@ export class ConvocoreClient {
     return this.request<any>(`/agents/${agentId}/convos/${convoId}`, {
       method: 'PATCH',
       body: JSON.stringify({ conversation }),
+    });
+  }
+
+  // ---- Conversation review notes (timeline of human notes; audit-logged server-side) ----
+
+  private convoNotesPath(agentId: string, convoId: string, noteId?: string): string {
+    const base = `/agents/${encodeURIComponent(agentId)}/convos/${encodeURIComponent(convoId)}/notes`;
+    return noteId ? `${base}/${encodeURIComponent(noteId)}` : base;
+  }
+
+  async listConversationNotes(agentId: string, convoId: string): Promise<any> {
+    return this.request<any>(this.convoNotesPath(agentId, convoId), { method: 'GET' });
+  }
+
+  async addConversationNote(
+    agentId: string,
+    convoId: string,
+    body: { text: string; authorName?: string }
+  ): Promise<any> {
+    return this.request<any>(this.convoNotesPath(agentId, convoId), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async updateConversationNote(
+    agentId: string,
+    convoId: string,
+    noteId: string,
+    body: { text: string; authorName?: string }
+  ): Promise<any> {
+    return this.request<any>(this.convoNotesPath(agentId, convoId, noteId), {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteConversationNote(
+    agentId: string,
+    convoId: string,
+    noteId: string,
+    authorName?: string
+  ): Promise<any> {
+    const query = authorName ? `?authorName=${encodeURIComponent(authorName)}` : '';
+    return this.request<any>(`${this.convoNotesPath(agentId, convoId, noteId)}${query}`, {
+      method: 'DELETE',
     });
   }
 

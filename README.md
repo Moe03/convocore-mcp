@@ -338,6 +338,10 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 | `create_conversation` | POST | `/agents/{agentId}/convos` body `{ conversation }` |
 | `get_conversation` | GET | `/agents/{agentId}/convos/{convoId}` |
 | `update_conversation` | PATCH | `/agents/{agentId}/convos/{convoId}` body `{ conversation }` |
+| `list_conversation_notes` | GET | `/agents/{agentId}/convos/{convoId}/notes` |
+| `add_conversation_note` | POST | `/agents/{agentId}/convos/{convoId}/notes` body `{ text, authorName? }` |
+| `update_conversation_note` | PATCH | `/agents/{agentId}/convos/{convoId}/notes/{noteId}` body `{ text, authorName? }` |
+| `delete_conversation_note` | DELETE | `/agents/{agentId}/convos/{convoId}/notes/{noteId}` |
 | `delete_conversation` | DELETE | `/agents/{agentId}/convos/{convoId}` |
 | `export_all_conversations` | GET | `/agents/{agentId}/convos/export?format=&limit=&cursor=&…` (requires paid workspace / `hasEverPaid`) |
 | `export_conversation` | GET | `/agents/{agentId}/convos/{convoId}/export?format=` |
@@ -410,6 +414,8 @@ All paths are relative to `baseUrl` (e.g. `https://eu-gcp-api.vg-stuff.com/v3`).
 **`get_conversation`** — Required: `agentId`, `convoId`.
 
 **`update_conversation`** — Required: `agentId`, `convoId`, `conversation` (partial fields).
+
+**Conversation notes** — a timeline of human review notes per conversation (`reviewNotes`, oldest first; also returned by `get_conversation`). `add_conversation_note` / `update_conversation_note` / `delete_conversation_note` need `agentId`, `convoId`, `text` / `noteId`; `authorName` (optional) labels an API-key caller such as "Claude via MCP". Notes cannot be changed through `update_conversation`. Every change is recorded in the workspace Logs (who, IP, time). `query_conversations` accepts `hasNotes` and `noteContains`.
 
 **`delete_conversation`** — Required: `agentId`, `convoId`.
 

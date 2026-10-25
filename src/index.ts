@@ -971,6 +971,14 @@ const QueryConversationsSchema = z.object({
     .boolean()
     .optional()
     .describe('If true, require non-empty userName; if false, require missing/empty'),
+  hasNotes: z
+    .boolean()
+    .optional()
+    .describe('If true, only conversations with human review notes; if false, only those without'),
+  noteContains: z
+    .string()
+    .optional()
+    .describe('Case-insensitive substring match on any review note text'),
 });
 
 const GetAgentUsageBulkSchema = z.object({
@@ -4075,6 +4083,8 @@ const coreTools: Tool[] = [
         },
         summaryContains: { type: 'string', description: 'Case-insensitive summary substring' },
         hasUserName: { type: 'boolean', description: 'Require / exclude userName' },
+        hasNotes: { type: 'boolean', description: 'Require / exclude human review notes' },
+        noteContains: { type: 'string', description: 'Case-insensitive substring in any review note' },
       },
       required: ['agentId'],
     },
@@ -5895,6 +5905,8 @@ const handleCallTool = async (request: CallToolRequest) => {
             capturedVariableEquals: validated.capturedVariableEquals,
             summaryContains: validated.summaryContains,
             hasUserName: validated.hasUserName,
+            hasNotes: validated.hasNotes,
+            noteContains: validated.noteContains,
           },
         });
         return {

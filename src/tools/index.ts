@@ -13,6 +13,7 @@ import { channelsModule } from './channels.js';
 import { createSearchCatalogModule } from './catalog.js';
 import { clientsModule } from './clients.js';
 import { cloneSendModule } from './clone-send.js';
+import { conversationNotesModule } from './conversation-notes.js';
 import { customMetricsModule } from './custom-metrics.js';
 import { dashboardChannelsModule } from './dashboard-channels.js';
 import { dashboardWorkspaceModule } from './dashboard-workspace.js';
@@ -36,6 +37,7 @@ const BASE_MODULES: ToolModule[] = [
   agentVariablesModule,
   testingModule,
   cloneSendModule,
+  conversationNotesModule,
   kbExtrasModule,
   whatsappModule,
   channelsModule,
