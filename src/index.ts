@@ -94,6 +94,16 @@ import {
   ListModeSchemaDescribe,
 } from './list-compact.js';
 import { buildDomainTools } from './tools/index.js';
+import { createSearchCatalogModule } from './tools/catalog.js';
+import {
+  assertGrayLabelToolCall,
+  filterGrayLabelTools,
+  GrayLabelAccessError,
+  grayLabelInstructions,
+  rebrandValue,
+  scrubHiddenToolNames,
+  type GrayLabelSession,
+} from './gray-label.js';
 import type { ToolHandler } from './tools/helpers.js';
 import { PACKAGE_VERSION } from './package-meta.js';
 
@@ -5180,7 +5190,14 @@ function assertAgentUpdateKeys(config: Record<string, unknown> | undefined, fiel
 }
 
 // Create MCP server (shared by stdio + hosted transports)
-export function createMcpServer(options?: { name?: string; version?: string; hosted?: boolean }): Server {
+export function createMcpServer(options?: {
+  name?: string;
+  version?: string;
+  hosted?: boolean;
+  /** Gray-label client session: agency-branded, limited to the client's agents. */
+  grayLabel?: GrayLabelSession;
+}): Server {
+const grayLabel = options?.grayLabel;
 const server = new Server(
   {
     name: (options?.name?.trim() || 'convocore-mcp').slice(0, 64),
@@ -5191,12 +5208,23 @@ const server = new Server(
       tools: {},
       prompts: {},
     },
-    instructions: MCP_SERVER_INSTRUCTIONS,
+    instructions: grayLabel
+      ? scrubHiddenToolNames(grayLabelInstructions(MCP_SERVER_INSTRUCTIONS, grayLabel), tools.map((t) => t.name))
+      : MCP_SERVER_INSTRUCTIONS,
   }
 );
 
+// Gray-label sessions see only client tools, rebranded; search_mcp_tools searches that set only.
+const grayLabelTools = grayLabel
+  ? scrubHiddenToolNames(rebrandValue(filterGrayLabelTools(tools), grayLabel.brand), tools.map((t) => t.name))
+  : undefined;
+const grayLabelSearchHandler = grayLabelTools
+  ? createSearchCatalogModule(() => grayLabelTools).handlers.search_mcp_tools
+  : undefined;
+
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (grayLabelTools) return { tools: grayLabelTools };
   return { tools: options?.hosted ? tools.filter((t) => !HOST_LOCAL_TOOLS.has(t.name)) : tools };
 });
 
@@ -5245,10 +5273,10 @@ const PROMPTS = [
 ] as const;
 
 server.setRequestHandler(ListPromptsRequestSchema, async () => {
-  return { prompts: PROMPTS };
+  return { prompts: grayLabel ? rebrandValue([...PROMPTS], grayLabel.brand) : PROMPTS };
 });
 
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+const handleGetPrompt = async (request: { params: { name: string; arguments?: Record<string, string> } }) => {
   const { name, arguments: args } = request.params;
 
   if (name === 'integrate_website_widget') {
@@ -5351,6 +5379,11 @@ ${widgetSnippet}
       : 'Widget CSS styling guide',
     messages,
   };
+};
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const result = await handleGetPrompt(request);
+  return grayLabel ? rebrandValue(result, grayLabel.brand) : result;
 });
 
 // Handle tool calls
@@ -6798,9 +6831,39 @@ const handleCallTool = async (request: CallToolRequest) => {
 };
 
 // Every tool call goes through here, so this is the single place usage telemetry is recorded.
+const handleGrayLabelCallTool = async (request: CallToolRequest, session: GrayLabelSession) => {
+  let args: Record<string, unknown> | undefined;
+  try {
+    args = assertGrayLabelToolCall(
+      request.params.name,
+      request.params.arguments as Record<string, unknown> | undefined,
+      session
+    );
+  } catch (error) {
+    if (!(error instanceof GrayLabelAccessError)) throw error;
+    return { isError: true, content: [{ type: 'text' as const, text: error.message }] };
+  }
+  if (
+    request.params.name === 'get_website_embed_code' &&
+    (args as { mode?: unknown } | undefined)?.mode === 'voice-react'
+  ) {
+    return {
+      isError: true,
+      content: [{ type: 'text' as const, text: 'The voice React snippet is not available on this connection. Use a chat widget mode instead.' }],
+    };
+  }
+  const result =
+    request.params.name === 'search_mcp_tools' && grayLabelSearchHandler
+      ? await grayLabelSearchHandler(args)
+      : await handleCallTool({ ...request, params: { ...request.params, arguments: args } });
+  return rebrandValue(result, session.brand);
+};
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const startedAt = performance.now();
-  const result = await handleCallTool(request);
+  const result = grayLabel
+    ? await handleGrayLabelCallTool(request, grayLabel)
+    : await handleCallTool(request);
   // Only cheap reads happen here; trackToolCall defers all telemetry work until after the result is returned.
   try {
     const client = server.getClientVersion();

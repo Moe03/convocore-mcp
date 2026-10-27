@@ -29,9 +29,18 @@ import {
 } from './request-context.js';
 import { isMcpPathname, isOfficialMcpHost, OFFICIAL_MCP_HOSTS } from './connector-url.js';
 import { resolveHostedWorkspaceSecret } from './hosted-auth.js';
-import { handleHostedOAuth, wwwAuthenticateChallenge } from './hosted-oauth.js';
+import { handleHostedOAuth, requestHost, wwwAuthenticateChallenge } from './hosted-oauth.js';
 import { buildInstallLinks, normalizeRegion } from './install-links.js';
-import { ConvocoreClient } from './convocore-client.js';
+import { ConvocoreApiRequestError, ConvocoreClient } from './convocore-client.js';
+import {
+  grayLabelDisplayName,
+  grayLabelHosts,
+  isClientToken,
+  isGrayLabelHost,
+  parseGrayLabelSession,
+  regionFromClientToken,
+  type GrayLabelSession,
+} from './gray-label.js';
 import {
   extractWorkspaceNameFromPayload,
   formatMcpDisplayName,
@@ -70,7 +79,31 @@ type SessionRecord = {
   context: RequestContextStore;
   workspaceSecret: string;
   lastSeenAt: number;
+  /** Gray-label client session (agency host + `gl_` token). Mutated in place on refresh. */
+  grayLabel?: GrayLabelSession;
+  grayLabelRefreshedAt?: number;
 };
+
+/** How long a gray-label session trusts its agent list / brand before re-reading it. */
+const GRAY_LABEL_REFRESH_MS = 60_000;
+
+class GrayLabelAuthError extends Error {}
+
+function isGrayLabelRequest(req: IncomingMessage): boolean {
+  return isGrayLabelHost(requestHost(req));
+}
+
+/** Scope + brand for a client token. Throws GrayLabelAuthError when the API refuses it. */
+async function loadGrayLabelSession(client: ConvocoreClient): Promise<GrayLabelSession> {
+  try {
+    return parseGrayLabelSession(await client.getClientMcpSession());
+  } catch (error) {
+    if (error instanceof ConvocoreApiRequestError && (error.status === 401 || error.status === 403)) {
+      throw new GrayLabelAuthError(error.message || 'This connection is no longer valid.');
+    }
+    throw error;
+  }
+}
 
 const sessions = new Map<string, SessionRecord>();
 
@@ -79,7 +112,7 @@ function parseAllowedHosts(): string[] {
   const fromEnv = raw
     ? raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)
     : [];
-  return [...new Set([...OFFICIAL_MCP_HOSTS, ...fromEnv])];
+  return [...new Set([...OFFICIAL_MCP_HOSTS, ...grayLabelHosts(), ...fromEnv])];
 }
 
 function secretsEqual(a: string, b: string): boolean {
@@ -201,6 +234,12 @@ function applyCors(req: IncomingMessage, res: ServerResponse): void {
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
+function authRequiredMessage(req: IncomingMessage): string {
+  return isGrayLabelRequest(req)
+    ? 'Authorization required: connect from your dashboard to get a connection link.'
+    : 'Authorization required: Bearer <WORKSPACE_SECRET> or ?token=<WORKSPACE_SECRET> on the MCP URL';
+}
+
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   if (!res.getHeader('Content-Type')) {
     res.setHeader('Content-Type', 'application/json');
@@ -249,10 +288,22 @@ async function createSession(
   workspaceSecret: string,
   apiRegion?: 'eu-gcp' | 'na-gcp',
   displayHints?: { workspaceName?: string; displayName?: string },
-  extraApiHeaders?: Record<string, string>
+  extraApiHeaders?: Record<string, string>,
+  grayLabel = false
 ): Promise<SessionRecord> {
-  const config = buildConfig({ workspaceSecret, apiRegion, extraApiHeaders });
+  const config = buildConfig({
+    workspaceSecret,
+    apiRegion: grayLabel ? regionFromClientToken(workspaceSecret) : apiRegion,
+    extraApiHeaders: grayLabel ? undefined : extraApiHeaders,
+    clientScoped: grayLabel,
+  });
   const context = createRequestContext(config);
+
+  let grayLabelSession: GrayLabelSession | undefined;
+  if (grayLabel) {
+    grayLabelSession = await loadGrayLabelSession(context.client);
+    if (grayLabelSession.workspaceId) config.workspaceId = grayLabelSession.workspaceId;
+  }
 
   let record!: SessionRecord;
 
@@ -268,28 +319,47 @@ async function createSession(
     },
   });
 
-  const workspaceName =
-    sanitizeWorkspaceName(displayHints?.workspaceName) ||
-    (await resolveWorkspaceName({
-      workspaceSecret,
-      apiRegion,
-      workspaceId: config.workspaceId,
-    }));
-  const displayName = formatMcpDisplayName({
-    name: displayHints?.displayName,
-    workspaceName,
-  });
+  let displayName: string;
+  if (grayLabelSession) {
+    displayName = grayLabelDisplayName(grayLabelSession);
+  } else {
+    const workspaceName =
+      sanitizeWorkspaceName(displayHints?.workspaceName) ||
+      (await resolveWorkspaceName({
+        workspaceSecret,
+        apiRegion,
+        workspaceId: config.workspaceId,
+      }));
+    displayName = formatMcpDisplayName({
+      name: displayHints?.displayName,
+      workspaceName,
+    });
+  }
 
-  const server = createMcpServer({ name: displayName, hosted: true });
+  const server = createMcpServer({ name: displayName, hosted: true, grayLabel: grayLabelSession });
   record = {
     transport,
     server,
     context,
     workspaceSecret,
     lastSeenAt: Date.now(),
+    grayLabel: grayLabelSession,
+    grayLabelRefreshedAt: grayLabelSession ? Date.now() : undefined,
   };
   await server.connect(transport);
   return record;
+}
+
+/**
+ * Keep a long-lived gray-label session in step with the agency: newly assigned / removed
+ * agents, brand changes, and revoked connections (→ GrayLabelAuthError).
+ */
+async function refreshGrayLabelSession(record: SessionRecord): Promise<void> {
+  if (!record.grayLabel) return;
+  if (Date.now() - (record.grayLabelRefreshedAt || 0) < GRAY_LABEL_REFRESH_MS) return;
+  const fresh = await runWithRequestContext(record.context, () => loadGrayLabelSession(record.context.client));
+  Object.assign(record.grayLabel, fresh);
+  record.grayLabelRefreshedAt = Date.now();
 }
 
 async function resolveSession(
@@ -311,17 +381,31 @@ async function resolveSession(
       return null;
     }
 
-    if (!secret || !secretsEqual(secret, existing.workspaceSecret)) {
-      sendUnauthorized(
-        req,
-        res,
-        'Authorization required: Bearer <WORKSPACE_SECRET> or ?token=<WORKSPACE_SECRET>'
-      );
+    if (
+      !secret ||
+      !secretsEqual(secret, existing.workspaceSecret) ||
+      Boolean(existing.grayLabel) !== isGrayLabelRequest(req)
+    ) {
+      sendUnauthorized(req, res, authRequiredMessage(req));
       return null;
     }
 
+    if (existing.grayLabel) {
+      try {
+        await refreshGrayLabelSession(existing);
+      } catch (error) {
+        if (error instanceof GrayLabelAuthError) {
+          await destroySession(sessionId);
+          sendUnauthorized(req, res, error.message);
+          return null;
+        }
+        // API hiccup: keep serving with the last known scope (the API still enforces it).
+        console.error('[hosted] gray-label refresh failed:', error);
+      }
+    }
+
     existing.lastSeenAt = Date.now();
-    const forwarded = pickForwardedApiHeaders(req);
+    const forwarded = existing.grayLabel ? {} : pickForwardedApiHeaders(req);
     if (Object.keys(forwarded).length > 0) {
       const merged = {
         ...(existing.context.config.extraApiHeaders || {}),
@@ -349,20 +433,38 @@ async function resolveSession(
   if (!secret) {
     // Claude custom connectors require OAuth DCR. WWW-Authenticate points at our AS.
     // Install links include ?token= so /oauth/authorize can auto-approve.
+    sendUnauthorized(req, res, authRequiredMessage(req));
+    return null;
+  }
+
+  // Agency host takes client tokens only; client tokens work only on the agency host.
+  const grayLabel = isGrayLabelRequest(req);
+  if (grayLabel !== isClientToken(secret)) {
     sendUnauthorized(
       req,
       res,
-      'Authorization required: Bearer <WORKSPACE_SECRET> or ?token=<WORKSPACE_SECRET> on the MCP URL'
+      grayLabel
+        ? 'This address only accepts connection links created from your dashboard.'
+        : 'This token is a client connection token; use the connection link it was issued with.'
     );
     return null;
   }
 
-  return createSession(
-    secret,
-    parseApiRegion(req),
-    parseDisplayHints(req),
-    pickForwardedApiHeaders(req)
-  );
+  try {
+    return await createSession(
+      secret,
+      parseApiRegion(req),
+      parseDisplayHints(req),
+      pickForwardedApiHeaders(req),
+      grayLabel
+    );
+  } catch (error) {
+    if (error instanceof GrayLabelAuthError) {
+      sendUnauthorized(req, res, error.message);
+      return null;
+    }
+    throw error;
+  }
 }
 
 function parseDisplayHints(req: IncomingMessage): {
@@ -400,6 +502,50 @@ async function handleMcpRequest(
   });
 }
 
+/**
+ * Install links for a client connection token on the agency host. Name = "{Agency} - {Client}",
+ * no platform-named headers. Body: { token } (or { workspaceSecret } for parity).
+ */
+async function handleGrayLabelInstallLinks(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method === 'GET') {
+    sendJson(res, 200, { ok: true, method: 'POST', path: INSTALL_LINKS_PATH, body: { token: '<connection token>' } });
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.writeHead(405, { Allow: 'GET, POST, OPTIONS' });
+    res.end();
+    return;
+  }
+  try {
+    const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+    const token =
+      typeof body?.token === 'string' ? body.token.trim() : typeof body?.workspaceSecret === 'string' ? body.workspaceSecret.trim() : '';
+    if (!isClientToken(token)) {
+      sendJson(res, 400, { error: 'A connection token from your dashboard is required.' });
+      return;
+    }
+    const region = regionFromClientToken(token);
+    if (!region) {
+      sendJson(res, 400, { error: 'Invalid connection token.' });
+      return;
+    }
+    const client = new ConvocoreClient(buildConfig({ workspaceSecret: token, apiRegion: region, clientScoped: true }));
+    const session = await loadGrayLabelSession(client);
+    const host = requestHost(req).split(',')[0].trim();
+    const links = buildInstallLinks({
+      mcpUrl: `https://${host}${MCP_PATH}`,
+      workspaceSecret: token,
+      region,
+      name: grayLabelDisplayName(session),
+      grayLabel: true,
+    });
+    sendJson(res, 200, { ok: true, ...links });
+  } catch (error) {
+    const status = error instanceof GrayLabelAuthError ? 401 : 400;
+    sendJson(res, status, { error: error instanceof Error ? error.message : 'Invalid request' });
+  }
+}
+
 function normalizePath(url: string | undefined): string {
   if (!url) return '/';
   const q = url.indexOf('?');
@@ -428,6 +574,11 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && (pathname === '/health' || pathname === '/') && isGrayLabelRequest(req)) {
+    sendJson(res, 200, { ok: true, service: 'mcp', path: MCP_PATH });
+    return;
+  }
+
   if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
     sendJson(res, 200, {
       ok: true,
@@ -445,6 +596,11 @@ const httpServer = createServer(async (req, res) => {
   }
 
   if (await handleHostedOAuth(req, res, pathname, MCP_PATH)) {
+    return;
+  }
+
+  if (pathname === INSTALL_LINKS_PATH && isGrayLabelRequest(req)) {
+    await handleGrayLabelInstallLinks(req, res);
     return;
   }
 

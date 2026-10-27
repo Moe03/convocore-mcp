@@ -372,12 +372,21 @@ export class ConvocoreClient {
    * List agents — GET /agents. Pass `limit` to request a smaller first page when
    * the API supports it (ignored by servers that omit pagination).
    */
+  /** Gray-label client connection: scope (agents) + agency brand. GET /client-mcp/whoami */
+  async getClientMcpSession(): Promise<any> {
+    return this.request<any>('/client-mcp/whoami');
+  }
+
   async listAgents(opts?: { limit?: number }): Promise<any> {
     const lim = opts?.limit;
     const q =
       typeof lim === 'number' && lim > 0
         ? `?limit=${Math.min(Math.floor(lim), 500)}`
         : '';
+    // Client connections may not list the whole workspace; search is pinned to their agents.
+    if (this.config.clientScoped) {
+      return this.request<any>(`/agents/search?page=1&limit=${lim && lim > 0 ? Math.min(Math.floor(lim), 100) : 100}`);
+    }
     return this.request<any>(`/agents${q}`);
   }
 

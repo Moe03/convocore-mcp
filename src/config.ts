@@ -11,6 +11,7 @@ export type ConvocoreConfigOptions = {
   interactWsUrl?: string;
   workspaceId?: string;
   extraApiHeaders?: Record<string, string>;
+  clientScoped?: boolean;
 };
 
 export function buildConfig(options: ConvocoreConfigOptions): ConvocoreConfig {
@@ -38,6 +39,7 @@ export function buildConfig(options: ConvocoreConfigOptions): ConvocoreConfig {
     interactWsUrl: interactWsUrlOverride || undefined,
     workspaceId,
     extraApiHeaders: options.extraApiHeaders,
+    ...(options.clientScoped ? { clientScoped: true } : {}),
   };
 }
 

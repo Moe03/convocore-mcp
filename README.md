@@ -135,6 +135,14 @@ Every request from `ConvocoreClient` includes:
 
 Non-OK responses: body is parsed as JSON; `message` is thrown as an error when present, otherwise a generic status message. Keep `WORKSPACE_SECRET` out of prompts, screenshots, and shared configs; use env vars or your host’s secret mechanism.
 
+### Gray-label client connections
+
+Agencies can let a whitelabel client connect Claude, ChatGPT or Cursor to **only the agents assigned to that client**, under the agency's brand, on a neutral host (`https://mcp-project.vg-stuff.com/mcp`, extra hosts via `GRAY_LABEL_MCP_HOSTS`).
+
+- The agency turns on **AI assistant access** for the client (`mcpAccess` on the client). The client clicks **Connect AI** in their dashboard; the API mints a `gl_…` connection token stored as a hash on the agency workspace (`users/{workspaceId}/mcpClientConnections`).
+- The agency host accepts `gl_` tokens only, and `gl_` tokens work only there. The API scopes every call to the client's agents (`client.widgetIDs ∪ org.widgetIDs`, read live) and refuses workspace-level routes; this server also narrows the tool list and checks agent ids.
+- Server name, instructions, tool text, results, errors and the OAuth Connect page carry the agency brand (`{Agency} - {Client}`), never the platform's. Scope and brand refresh every minute on open sessions; revoking a connection or turning access off stops it.
+
 ---
 
 ## Quick start

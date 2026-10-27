@@ -11,6 +11,11 @@ export interface ConvocoreConfig {
    */
   workspaceId?: string;
   /**
+   * Gray-label client connection (`gl_` token): the API limits every call to the client's
+   * agents, and workspace-wide endpoints (e.g. GET /agents) are refused, so use scoped ones.
+   */
+  clientScoped?: boolean;
+  /**
    * Optional explicit override for the /interact WebSocket URL.
    * When unset, the URL is derived from `baseUrl` by swapping the scheme
    * to ws/wss and pointing at /interact on the same host.

@@ -28,13 +28,18 @@ export type InstallLinksInput = {
   name?: string;
   /** Workspace label — used to build `Convocore {workspaceName}` when `name` is omitted. */
   workspaceName?: string;
+  /**
+   * Gray-label client connection (`gl_` token on the agency host): no platform-named headers
+   * or env vars (the token carries its region), neutral wording, `name` is used as given.
+   */
+  grayLabel?: boolean;
 };
 
 export type CursorRemoteMcpConfig = {
   url: string;
   headers: {
     Authorization: string;
-    'X-Convocore-Region': ConvocoreRegion;
+    'X-Convocore-Region'?: ConvocoreRegion;
   };
 };
 
@@ -105,13 +110,16 @@ export function buildCursorRemoteConfig(input: {
   mcpUrl: string;
   workspaceSecret: string;
   region: ConvocoreRegion;
+  grayLabel?: boolean;
 }): CursorRemoteMcpConfig {
   return {
     url: input.mcpUrl,
-    headers: {
-      Authorization: `Bearer ${input.workspaceSecret}`,
-      'X-Convocore-Region': input.region,
-    },
+    headers: input.grayLabel
+      ? { Authorization: `Bearer ${input.workspaceSecret}` }
+      : {
+          Authorization: `Bearer ${input.workspaceSecret}`,
+          'X-Convocore-Region': input.region,
+        },
   };
 }
 
@@ -152,8 +160,20 @@ export function buildClaudeDesktopRemoteConfig(input: {
   mcpUrl: string;
   workspaceSecret: string;
   region: ConvocoreRegion;
+  grayLabel?: boolean;
 }): InstallLinksResult['claudeDesktop'] {
   // mcp-remote interpolates ${ENV} inside --header values from the env block.
+  if (input.grayLabel) {
+    return {
+      mcpServers: {
+        [input.name]: {
+          command: 'npx',
+          args: ['-y', 'mcp-remote', input.mcpUrl, '--header', 'Authorization: Bearer ${MCP_TOKEN}'],
+          env: { MCP_TOKEN: input.workspaceSecret },
+        },
+      },
+    };
+  }
   return {
     mcpServers: {
       [input.name]: {
@@ -178,10 +198,12 @@ export function buildClaudeDesktopRemoteConfig(input: {
 
 export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult {
   const workspaceName = input.workspaceName?.trim() || undefined;
-  const name = formatMcpDisplayName({
-    name: input.name,
-    workspaceName,
-  });
+  const name = input.grayLabel
+    ? (input.name?.trim() || 'AI Assistant').slice(0, 64)
+    : formatMcpDisplayName({
+        name: input.name,
+        workspaceName,
+      });
   const region = normalizeRegion(input.region);
   const mcpUrl = input.mcpUrl.trim();
   if (!mcpUrl) throw new Error('mcpUrl is required');
@@ -194,6 +216,7 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
     mcpUrl,
     workspaceSecret: secret,
     region,
+    grayLabel: input.grayLabel,
   });
   const claudeConnectorUrl = mcpUrlForClaudeConnector(mcpUrl, region, secret, {
     workspaceName,
@@ -231,7 +254,9 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
         'Open the Claude install URL (sign in if needed).',
         `Confirm the prefilled name "${name}" and URL (secret is in the path /t/…/mcp).`,
         'Leave OAuth Client ID / Client Secret EMPTY — Claude auto-registers (DCR).',
-        'If a Convocore page opens, click Connect once — no secret paste (already in the URL).',
+        input.grayLabel
+          ? 'If a Connect page opens, click Connect once — nothing to paste.'
+          : 'If a Convocore page opens, click Connect once — no secret paste (already in the URL).',
         'Connection tokens last ~10 years (with refresh).',
       ],
     },
@@ -240,6 +265,7 @@ export function buildInstallLinks(input: InstallLinksInput): InstallLinksResult 
       mcpUrl,
       workspaceSecret: secret,
       region,
+      grayLabel: input.grayLabel,
     }),
   };
 }

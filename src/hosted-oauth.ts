@@ -17,6 +17,15 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extractSecretFromConnectorUrl, isOfficialMcpHost } from './connector-url.js';
 import { formatMcpDisplayName } from './mcp-display-name.js';
+import { buildConfig } from './config.js';
+import { ConvocoreClient } from './convocore-client.js';
+import {
+  grayLabelDisplayName,
+  isClientToken,
+  isGrayLabelHost,
+  parseGrayLabelSession,
+  regionFromClientToken,
+} from './gray-label.js';
 
 const TEN_YEARS_SEC = 10 * 365 * 24 * 60 * 60;
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -61,7 +70,7 @@ function pkceS256(verifier: string): string {
   return base64Url(createHash('sha256').update(verifier).digest());
 }
 
-function requestHost(req: IncomingMessage): string {
+export function requestHost(req: IncomingMessage): string {
   const xfHost = req.headers['x-forwarded-host'];
   const forwarded = Array.isArray(xfHost) ? xfHost[0] : xfHost;
   return (
@@ -72,8 +81,8 @@ function requestHost(req: IncomingMessage): string {
 
 export function publicBaseUrl(req: IncomingMessage): string {
   const host = requestHost(req);
-  // Keep OAuth issuer on the hostname the client actually used (.ai or .app).
-  if (isOfficialMcpHost(host)) {
+  // Keep OAuth issuer on the hostname the client actually used (.ai / .app / agency host).
+  if (isOfficialMcpHost(host) || isGrayLabelHost(host)) {
     const bare = host.toLowerCase().split(':')[0];
     return `https://${bare}`;
   }
@@ -101,7 +110,22 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.end(html);
 }
 
-function asMetadata(issuer: string, mcpPath: string) {
+function asMetadata(issuer: string, mcpPath: string, grayLabel = false) {
+  if (grayLabel) {
+    return {
+      issuer,
+      authorization_endpoint: `${issuer}/oauth/authorize`,
+      token_endpoint: `${issuer}/oauth/token`,
+      registration_endpoint: `${issuer}/oauth/register`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+      scopes_supported: ['mcp'],
+      client_id_metadata_document_supported: false,
+      mcp_resource: `${issuer}${mcpPath}`,
+    };
+  }
   return {
     issuer,
     authorization_endpoint: `${issuer}/oauth/authorize`,
@@ -119,7 +143,15 @@ function asMetadata(issuer: string, mcpPath: string) {
   };
 }
 
-function protectedResourceDoc(issuer: string, mcpPath: string) {
+function protectedResourceDoc(issuer: string, mcpPath: string, grayLabel = false) {
+  if (grayLabel) {
+    return {
+      resource: `${issuer}${mcpPath}`,
+      authorization_servers: [issuer],
+      bearer_methods_supported: ['header'],
+      scopes_supported: ['mcp'],
+    };
+  }
   return {
     resource: `${issuer}${mcpPath}`,
     authorization_servers: [issuer],
@@ -162,6 +194,7 @@ function issueAuthCode(input: Omit<AuthCode, 'expiresAt'>): string {
 }
 
 function issueTokens(workspaceSecret: string, clientId: string, region?: string) {
+  const scope = isClientToken(workspaceSecret) ? 'mcp' : 'mcp convocore';
   const refresh = base64Url(randomBytes(32));
   refreshTokens.set(refresh, {
     workspaceSecret,
@@ -174,7 +207,7 @@ function issueTokens(workspaceSecret: string, clientId: string, region?: string)
     token_type: 'bearer',
     expires_in: TEN_YEARS_SEC,
     refresh_token: refresh,
-    scope: 'mcp convocore',
+    scope,
   };
 }
 
@@ -191,14 +224,28 @@ function hiddenFieldsHtml(params: URLSearchParams, extra?: Record<string, string
     .join('\n');
 }
 
+/** Page look: platform default, or the agency's logo / colour on the gray-label host. */
+type PageBrand = { logoUrl?: string | null; primaryColor?: string | null; grayLabel?: boolean };
+
+function brandStyles(brand?: PageBrand): { accent: string; accentHover: string; logo: string } {
+  const color = brand?.primaryColor && /^#[0-9a-f]{3,8}$/i.test(brand.primaryColor) ? brand.primaryColor : '#2563eb';
+  const logo =
+    brand?.logoUrl && /^https:\/\//i.test(brand.logoUrl)
+      ? `<img src="${escapeHtml(brand.logoUrl)}" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;margin:0 auto 14px;display:block"/>`
+      : '';
+  return { accent: color, accentHover: color, logo };
+}
+
 /** One-click Connect — secret already known from connector URL / path. */
 function connectOnlyHtml(
   params: URLSearchParams,
   workspaceSecret: string,
-  displayName: string
+  displayName: string,
+  brand?: PageBrand
 ): string {
   const hidden = hiddenFieldsHtml(params, { workspace_secret: workspaceSecret });
   const title = escapeHtml(displayName);
+  const look = brandStyles(brand);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Connect ${title}</title>
@@ -206,11 +253,12 @@ function connectOnlyHtml(
   body{font-family:ui-sans-serif,system-ui,sans-serif;background:#0b1220;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
   .card{width:min(380px,92vw);background:#111827;border:1px solid #1f2937;border-radius:16px;padding:28px;text-align:center}
   h1{font-size:1.25rem;margin:0 0 8px} p{color:#9ca3af;font-size:.95rem;line-height:1.45;margin:0 0 20px}
-  button{width:100%;padding:14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
-  button:hover{background:#1d4ed8}
+  button{width:100%;padding:14px;border:0;border-radius:10px;background:${look.accent};color:#fff;font-weight:600;font-size:1rem;cursor:pointer}
+  button:hover{filter:brightness(.92)}
 </style></head><body><div class="card">
+  ${look.logo}
   <h1>Connect ${title}</h1>
-  <p>Your workspace is ready. Click Connect to finish linking this MCP.</p>
+  <p>${brand?.grayLabel ? 'Your account is ready. Click Connect to link your AI assistant.' : 'Your workspace is ready. Click Connect to finish linking this MCP.'}</p>
   <form id="connect" method="POST" action="/oauth/authorize">
     ${hidden}
     <button type="submit">Connect</button>
@@ -223,8 +271,10 @@ function connectOnlyHtml(
 function authorizeFormHtml(
   params: URLSearchParams,
   displayName: string,
-  error?: string
+  error?: string,
+  brand?: PageBrand
 ): string {
+  const look = brandStyles(brand);
   const err = error
     ? `<p style="color:#b91c1c;margin:0 0 12px">${escapeHtml(error)}</p>`
     : '';
@@ -239,16 +289,17 @@ function authorizeFormHtml(
   h1{font-size:1.25rem;margin:0 0 8px} p{color:#9ca3af;font-size:.95rem;line-height:1.45;margin:0 0 16px}
   label{display:block;font-size:.8rem;margin-bottom:6px;color:#d1d5db}
   input[type=password],input[type=text]{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#fff}
-  button{margin-top:16px;width:100%;padding:12px 14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}
-  button:hover{background:#1d4ed8}
+  button{margin-top:16px;width:100%;padding:12px 14px;border:0;border-radius:10px;background:${look.accent};color:#fff;font-weight:600;cursor:pointer}
+  button:hover{filter:brightness(.92)}
 </style></head><body><div class="card">
+  ${look.logo}
   <h1>Connect ${title}</h1>
-  <p>We could not read your workspace secret from the connector URL. Paste it once to finish.</p>
+  <p>${brand?.grayLabel ? 'We could not read your connection token from the link. Paste the token from your dashboard once to finish.' : 'We could not read your workspace secret from the connector URL. Paste it once to finish.'}</p>
   ${err}
   <form method="POST" action="/oauth/authorize">
     ${hidden}
-    <label for="workspace_secret">Workspace secret</label>
-    <input id="workspace_secret" name="workspace_secret" type="password" autocomplete="off" required placeholder="vg_…" />
+    <label for="workspace_secret">${brand?.grayLabel ? 'Connection token' : 'Workspace secret'}</label>
+    <input id="workspace_secret" name="workspace_secret" type="password" autocomplete="off" required placeholder="${brand?.grayLabel ? 'gl_…' : 'vg_…'}" />
     <button type="submit">Connect</button>
   </form>
 </div></body></html>`;
@@ -342,16 +393,19 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     params.get('token')?.trim() ||
     '';
   const fromResource = extractSecretFromConnectorUrl(resource);
-  const displayName = formatMcpDisplayName({
-    name:
-      params.get('mcpName')?.trim() ||
-      params.get('name')?.trim() ||
-      fromResource.displayName,
-    workspaceName:
-      params.get('workspaceName')?.trim() ||
-      params.get('workspace_name')?.trim() ||
-      fromResource.workspaceName,
-  });
+  const grayLabel = isGrayLabelHost(requestHost(req));
+  const hintedName =
+    params.get('mcpName')?.trim() || params.get('name')?.trim() || fromResource.displayName;
+  let brand: PageBrand | undefined = grayLabel ? { grayLabel: true } : undefined;
+  let displayName = grayLabel
+    ? (hintedName || 'AI Assistant').slice(0, 64)
+    : formatMcpDisplayName({
+        name: hintedName,
+        workspaceName:
+          params.get('workspaceName')?.trim() ||
+          params.get('workspace_name')?.trim() ||
+          fromResource.workspaceName,
+      });
 
   if (responseType !== 'code') {
     sendJson(res, 400, { error: 'unsupported_response_type' });
@@ -387,18 +441,50 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
   const region = fromResource.region;
 
   if (!secret) {
+    const missing = grayLabel ? 'Connection token is required.' : 'Workspace secret is required.';
     if (req.method === 'POST') {
-      sendHtml(res, 400, authorizeFormHtml(params, displayName, 'Workspace secret is required.'));
+      sendHtml(res, 400, authorizeFormHtml(params, displayName, missing, brand));
       return;
     }
-    sendHtml(res, 200, authorizeFormHtml(params, displayName));
+    sendHtml(res, 200, authorizeFormHtml(params, displayName, undefined, brand));
     return;
+  }
+
+  // Agency host: client connection tokens only, branded from the connection itself.
+  if (grayLabel !== isClientToken(secret)) {
+    sendHtml(
+      res,
+      400,
+      authorizeFormHtml(
+        params,
+        displayName,
+        grayLabel
+          ? 'Use the connection link from your dashboard.'
+          : 'This is a client connection token; use the link it was issued with.',
+        brand
+      )
+    );
+    return;
+  }
+  if (grayLabel) {
+    try {
+      const api = new ConvocoreClient(
+        buildConfig({ workspaceSecret: secret, apiRegion: regionFromClientToken(secret), clientScoped: true })
+      );
+      const session = parseGrayLabelSession(await api.getClientMcpSession());
+      displayName = grayLabelDisplayName(session);
+      brand = { grayLabel: true, logoUrl: session.brand.logoUrl, primaryColor: session.brand.primaryColor };
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'This connection is no longer valid.';
+      sendHtml(res, 401, authorizeFormHtml(params, displayName, message, brand));
+      return;
+    }
   }
 
   // GET with secret already in resource/path: one-click Connect (auto-submits).
   // POST continues to issue the auth code.
   if (req.method === 'GET') {
-    sendHtml(res, 200, connectOnlyHtml(params, secret, displayName));
+    sendHtml(res, 200, connectOnlyHtml(params, secret, displayName, brand));
     return;
   }
 
@@ -478,13 +564,14 @@ export async function handleHostedOAuth(
   mcpPath: string
 ): Promise<boolean> {
   const base = publicBaseUrl(req);
+  const grayLabel = isGrayLabelHost(requestHost(req));
 
   if (
     req.method === 'GET' &&
     (pathname === '/.well-known/oauth-authorization-server' ||
       pathname === '/.well-known/openid-configuration')
   ) {
-    sendJson(res, 200, asMetadata(base, mcpPath));
+    sendJson(res, 200, asMetadata(base, mcpPath, grayLabel));
     return true;
   }
 
@@ -494,7 +581,7 @@ export async function handleHostedOAuth(
       !suffix || suffix === '/'
         ? mcpPath
         : suffix; // e.g. /mcp or /t/<seg>/mcp
-    sendJson(res, 200, protectedResourceDoc(base, resourcePath));
+    sendJson(res, 200, protectedResourceDoc(base, resourcePath, grayLabel));
     return true;
   }
 
@@ -519,7 +606,8 @@ export async function handleHostedOAuth(
 export function wwwAuthenticateChallenge(req: IncomingMessage): string {
   const base = publicBaseUrl(req);
   const metadata = `${base}/.well-known/oauth-protected-resource`;
-  return `Bearer realm="convocore-mcp", resource_metadata="${metadata}"`;
+  const realm = isGrayLabelHost(requestHost(req)) ? 'mcp' : 'convocore-mcp';
+  return `Bearer realm="${realm}", resource_metadata="${metadata}"`;
 }
 
 /** Test helper — clear in-memory OAuth state. */
