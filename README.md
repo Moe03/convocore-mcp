@@ -5,6 +5,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 [![npm version](https://img.shields.io/npm/v/convocore-mcp.svg)](https://www.npmjs.com/package/convocore-mcp)
 [![Docker Hub](https://img.shields.io/badge/docker-moe003%2Fconvocore--mcp-blue)](https://hub.docker.com/r/moe003/convocore-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Convocore MCP connector – tool definition quality and endpoint health on Glama](https://glama.ai/mcp/connectors/app.convocore.mcp/convocore/badges/score.svg)](https://glama.ai/mcp/connectors/app.convocore.mcp/convocore)
 
 ---
 
