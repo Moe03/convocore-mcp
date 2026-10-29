@@ -698,6 +698,84 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
   redirectWithCode(res, redirectUri, code, state);
 }
 
+/** Dashboards allowed to call /oauth/approve (the consent page runs there). */
+function consoleOrigins(): Set<string> {
+  const extra = (process.env.CONVOCORE_CONSOLE_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  return new Set([
+    'https://convocore.app',
+    'https://www.convocore.app',
+    'https://convocore.ai',
+    'https://www.convocore.ai',
+    ...extra,
+  ]);
+}
+
+/**
+ * Consent page "Allow" / "Cancel". The page calls this with fetch and then navigates to the
+ * returned callback itself: a form post that ends in a redirect to claude.ai / localhost /
+ * cursor:// is blocked by the dashboard's CSP form-action, which also covers redirects.
+ * Same checks as /oauth/authorize; answers JSON instead of redirecting.
+ */
+async function handleApprove(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+  if (!origin || !consoleOrigins().has(origin) || isGrayLabelHost(requestHost(req))) {
+    sendJson(res, 403, { error: 'forbidden_origin' });
+    return;
+  }
+  // CORS headers and preflight are handled for every route by hosted.ts (applyCors).
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'method_not_allowed' });
+    return;
+  }
+
+  const params = new URLSearchParams(parseFormOrJson(await readBody(req), req.headers['content-type']));
+  const clientId = params.get('client_id') || '';
+  const redirectUri = params.get('redirect_uri') || '';
+  const codeChallenge = params.get('code_challenge') || '';
+  const state = params.get('state') || undefined;
+  if ((params.get('response_type') || 'code') !== 'code' || !clientId || !redirectUri || !codeChallenge) {
+    sendJson(res, 400, { error: 'invalid_request', message: 'This connection request is incomplete. Start again from your AI app.' });
+    return;
+  }
+  if (!isRedirectAllowed(await resolveClient(clientId), redirectUri)) {
+    sendJson(res, 400, { error: 'invalid_redirect_uri', message: 'This app is not allowed to receive access.' });
+    return;
+  }
+
+  const callback = new URL(redirectUri);
+  if (state) callback.searchParams.set('state', state);
+  if (params.get('deny') === '1') {
+    callback.searchParams.set('error', 'access_denied');
+    sendJson(res, 200, { redirect: callback.toString() });
+    return;
+  }
+
+  const secret = params.get('workspace_secret')?.trim() || '';
+  const region = normalizeRegionParam(params.get('region'));
+  if (!secret || isClientToken(secret)) {
+    sendJson(res, 400, { error: 'invalid_request', message: 'Missing workspace access. Try Allow again.' });
+    return;
+  }
+  if (!(await secretValidator(secret, region))) {
+    sendJson(res, 401, { error: 'invalid_secret', message: 'Convocore did not accept this workspace. Try Allow again.' });
+    return;
+  }
+
+  const code = issueAuthCode({
+    workspaceSecret: secret,
+    region,
+    clientId,
+    redirectUri,
+    codeChallenge,
+    codeChallengeMethod: params.get('code_challenge_method') || 'S256',
+  });
+  callback.searchParams.set('code', code);
+  sendJson(res, 200, { redirect: callback.toString() });
+}
+
 async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'POST') {
     res.writeHead(405, { Allow: 'POST' });
@@ -791,6 +869,11 @@ export async function handleHostedOAuth(
 
   if (pathname === '/oauth/authorize') {
     await handleAuthorize(req, res);
+    return true;
+  }
+
+  if (pathname === '/oauth/approve') {
+    await handleApprove(req, res);
     return true;
   }
 
