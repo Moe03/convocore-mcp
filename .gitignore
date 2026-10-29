@@ -6,3 +6,4 @@ dist/
 tmp-pack/
 .npmrc
 
+convocore-openai-plugin.zip

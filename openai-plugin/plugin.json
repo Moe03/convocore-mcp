@@ -1,16 +1,20 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "convocore",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Build, edit and run Convocore AI chat and voice agents: prompts, knowledge bases, conversations, leads, calls, WhatsApp and analytics, through Convocore's own API.",
-  "author": { "name": "VECTOR WIZARDS LLC", "email": "support@convocore.ai", "url": "https://convocore.ai" },
+  "author": {
+    "name": "VECTOR WIZARDS LLC",
+    "email": "support@convocore.ai",
+    "url": "https://convocore.ai"
+  },
   "license": "MIT",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Convocore",
         "shortDescription": "Build and run AI agents",
-        "longDescription": "Convocore is a platform for AI agents that answer customers on web chat, WhatsApp, Instagram, Messenger, SMS, email and phone. This plugin gives ChatGPT the same controls as the Convocore dashboard, so you can manage your workspace in conversation.\n\nCreate an agent for a business from its website, rewrite or edit an agent's prompt, add pages and files to its knowledge base, attach HTTP tools and variables, and test the agent with a live chat turn before going live. Review conversations and transcripts, add review notes, summarize what customers asked about, and export data. Work with leads, lead groups and contacts; run outbound call and WhatsApp campaigns; check call logs, usage, credits and custom metrics. Agencies can also manage client accounts, folders and whitelabel branding.\n\nRead tools never change data. Anything that deletes, overwrites, sends a message or places a call is marked as such so ChatGPT asks before running it. Plans, numbers and payments are managed on the Convocore dashboard only.\n\nRequires a Convocore account on the Business plan or higher.",
+        "longDescription": "Convocore is a platform for AI agents that answer customers on web chat, WhatsApp, Instagram, Messenger, SMS, email and phone. This plugin gives ChatGPT the same controls as the Convocore dashboard, so you can manage your workspace in conversation.\n\nCreate an agent for a business from its website, rewrite or edit an agent's prompt, add pages and files to its knowledge base, attach HTTP tools and variables, and test the agent with a live chat turn before going live. Review conversations and transcripts, add review notes, summarize what customers asked about, and export data. Work with leads, lead groups and contacts; run outbound call and WhatsApp campaigns; check call logs, usage, credits and custom metrics. Agencies can also manage client accounts, folders and whitelabel branding.\n\nRead tools never change data. Anything that deletes, overwrites, sends a message or places a call is marked as such so ChatGPT asks before running it.\n\nRequires a Convocore account with MCP access.",
         "developerName": "VECTOR WIZARDS LLC",
         "category": "Productivity",
         "capabilities": [
