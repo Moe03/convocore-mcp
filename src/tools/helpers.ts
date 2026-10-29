@@ -148,3 +148,11 @@ export const WRITE_ANNOTATIONS = {
   idempotentHint: false,
   openWorldHint: true,
 } as const;
+
+/** Writes that add or edit data but never delete or overwrite it wholesale. */
+export const CREATE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;

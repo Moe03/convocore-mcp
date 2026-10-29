@@ -94,6 +94,7 @@ import {
   ListModeSchemaDescribe,
 } from './list-compact.js';
 import { buildDomainTools } from './tools/index.js';
+import { withToolAnnotations } from './tool-annotations.js';
 import { createSearchCatalogModule } from './tools/catalog.js';
 import {
   assertGrayLabelToolCall,
@@ -5132,7 +5133,7 @@ let tools: Tool[] = [...coreTools];
 const { tools: domainTools, handlers: domainHandlers } = buildDomainTools(
   () => tools
 );
-tools = [...coreTools, ...domainTools];
+tools = [...coreTools, ...domainTools].map(withToolAnnotations);
 const domainHandlerMap: Record<string, ToolHandler> = domainHandlers;
 
 // Tools that act on the machine the MCP server runs on (shell commands, local files). On the local

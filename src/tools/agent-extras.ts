@@ -8,6 +8,7 @@ import {
   LightModeProperty,
   applyLightMode,
   requireFor,
+  CREATE_ANNOTATIONS,
   READ_ANNOTATIONS,
   WRITE_ANNOTATIONS,
 } from './helpers.js';
@@ -127,7 +128,7 @@ const tools: Tool[] = [
     name: 'agent_gallery_templates',
     description:
       'The ready-made agent templates shown in the dashboard gallery. Actions: list (available templates with their templateId), create (templateId, optional title / description: creates a new agent from that template as-is). To build a custom agent for a specific business use create_agent_from_template instead.',
-    annotations: WRITE_ANNOTATIONS,
+    annotations: CREATE_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
