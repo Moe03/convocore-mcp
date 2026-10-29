@@ -35,6 +35,7 @@ type RegisteredClient = {
   clientId: string;
   redirectUris: string[];
   tokenEndpointAuthMethod: string;
+  clientName?: string;
 };
 
 type AuthCode = {
@@ -57,6 +58,168 @@ type RefreshRecord = {
 const clients = new Map<string, RegisteredClient>();
 const authCodes = new Map<string, AuthCode>();
 const refreshTokens = new Map<string, RefreshRecord>();
+
+/**
+ * Callbacks of the AI apps we support. Used when we hold no registration for the
+ * client (registrations are in memory and drop on restart) so those clients keep
+ * working without letting a made-up client_id send a code anywhere.
+ */
+const KNOWN_APP_CALLBACK_PREFIXES = [
+  'https://claude.ai/',
+  'https://claude.com/',
+  'https://chatgpt.com/',
+  'https://chat.openai.com/',
+  'cursor://',
+  'vscode://',
+  'vscode-insiders://',
+];
+
+function isLoopbackRedirect(uri: string): boolean {
+  try {
+    const u = new URL(uri);
+    return (
+      u.protocol === 'http:' &&
+      (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** RFC 8252 7.3: loopback redirects match on everything but the port. */
+function sameLoopbackIgnoringPort(a: string, b: string): boolean {
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    return x.protocol === y.protocol && x.hostname === y.hostname && x.pathname === y.pathname;
+  } catch {
+    return false;
+  }
+}
+
+function isKnownAppRedirect(uri: string): boolean {
+  return isLoopbackRedirect(uri) || KNOWN_APP_CALLBACK_PREFIXES.some((p) => uri.startsWith(p));
+}
+
+export function isRedirectAllowed(client: RegisteredClient | undefined, redirectUri: string): boolean {
+  if (!redirectUri) return false;
+  if (client) {
+    if (client.redirectUris.includes(redirectUri)) return true;
+    if (
+      isLoopbackRedirect(redirectUri) &&
+      client.redirectUris.some((r) => isLoopbackRedirect(r) && sameLoopbackIgnoringPort(r, redirectUri))
+    ) {
+      return true;
+    }
+  }
+  return isKnownAppRedirect(redirectUri);
+}
+
+/** Client ID Metadata Documents (MCP 2025-11-25): client_id is an https URL to the client's metadata. */
+const CIMD_TTL_MS = 60 * 60 * 1000;
+const CIMD_TIMEOUT_MS = 5000;
+const CIMD_MAX_BYTES = 64 * 1024;
+const cimdCache = new Map<string, { client: RegisteredClient | null; expiresAt: number }>();
+
+function isCimdClientId(clientId: string): boolean {
+  try {
+    const u = new URL(clientId);
+    if (u.protocol !== 'https:' || u.pathname === '/' || u.hash) return false;
+    const host = u.hostname.toLowerCase();
+    // Never let a client_id point the server at itself or a private network.
+    return !(
+      host === 'localhost' ||
+      /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ||
+      host.includes(':') ||
+      host.endsWith('.internal') ||
+      host.endsWith('.local')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function fetchCimdClient(clientId: string): Promise<RegisteredClient | null> {
+  const cached = cimdCache.get(clientId);
+  if (cached && cached.expiresAt > Date.now()) return cached.client;
+  let client: RegisteredClient | null = null;
+  try {
+    const res = await fetch(clientId, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(CIMD_TIMEOUT_MS),
+    });
+    const text = res.ok ? await res.text() : '';
+    if (text && text.length <= CIMD_MAX_BYTES) {
+      const doc = JSON.parse(text) as Record<string, unknown>;
+      const redirectUris = Array.isArray(doc.redirect_uris)
+        ? doc.redirect_uris.filter((u): u is string => typeof u === 'string')
+        : [];
+      if (doc.client_id === clientId && redirectUris.length > 0) {
+        client = {
+          clientId,
+          redirectUris,
+          tokenEndpointAuthMethod: 'none',
+          clientName: typeof doc.client_name === 'string' ? doc.client_name.slice(0, 80) : undefined,
+        };
+      }
+    }
+  } catch {
+    client = null;
+  }
+  cimdCache.set(clientId, { client, expiresAt: Date.now() + CIMD_TTL_MS });
+  return client;
+}
+
+async function resolveClient(clientId: string): Promise<RegisteredClient | undefined> {
+  const registered = clients.get(clientId);
+  if (registered) return registered;
+  if (isCimdClientId(clientId)) return (await fetchCimdClient(clientId)) ?? undefined;
+  return undefined;
+}
+
+/**
+ * Checks a workspace secret against the API before a code is issued, so a typo fails
+ * here instead of on every tool call later. Only a clear 401/403 rejects it; network
+ * errors let it through (the API stays the real gate).
+ */
+type SecretValidator = (secret: string, region?: string) => Promise<boolean>;
+
+const defaultSecretValidator: SecretValidator = async (secret, region) => {
+  try {
+    const config = buildConfig({
+      workspaceSecret: secret,
+      apiRegion: region === 'na-gcp' || region === 'eu-gcp' ? region : undefined,
+    });
+    const res = await fetch(`${config.baseUrl}/workspaces`, {
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(6000),
+    });
+    return res.status !== 401 && res.status !== 403;
+  } catch {
+    return true;
+  }
+};
+
+let secretValidator: SecretValidator = defaultSecretValidator;
+
+/**
+ * Account sign-in: plain-URL connections (no secret) go to the Convocore dashboard to sign in
+ * and approve, which posts a dedicated, revocable workspace secret back to /oauth/authorize.
+ */
+function consoleOriginFor(mcpHost: string): string {
+  const bare = mcpHost.toLowerCase().split(':')[0];
+  if (bare === 'mcp.convocore.ai') return 'https://convocore.ai';
+  if (bare === 'mcp.convocore.app') return 'https://convocore.app';
+  return (process.env.CONVOCORE_CONSOLE_URL?.trim() || 'https://convocore.app').replace(/\/$/, '');
+}
+
+function normalizeRegionParam(raw: string | null): 'eu-gcp' | 'na-gcp' | undefined {
+  const v = (raw || '').trim().toLowerCase();
+  if (v === 'eu' || v === 'eu-gcp') return 'eu-gcp';
+  if (v === 'na' || v === 'na-gcp') return 'na-gcp';
+  return undefined;
+}
 
 function base64Url(buf: Buffer): string {
   return buf
@@ -136,7 +299,7 @@ function asMetadata(issuer: string, mcpPath: string, grayLabel = false) {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
     scopes_supported: ['mcp', 'convocore'],
-    client_id_metadata_document_supported: false,
+    client_id_metadata_document_supported: true,
     service_documentation: 'https://github.com/Moe03/convocore-mcp',
     // Hint for humans / Claude advanced settings
     mcp_resource: `${issuer}${mcpPath}`,
@@ -278,7 +441,11 @@ function authorizeFormHtml(
   const err = error
     ? `<p style="color:#b91c1c;margin:0 0 12px">${escapeHtml(error)}</p>`
     : '';
-  const hidden = hiddenFieldsHtml(params);
+  // Never echo a previously submitted secret back as a hidden field: it would be read before
+  // the corrected one typed into the visible input.
+  const carried = new URLSearchParams(params);
+  for (const k of ['workspace_secret', 'token', 'deny']) carried.delete(k);
+  const hidden = hiddenFieldsHtml(carried);
   const title = escapeHtml(displayName);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -354,6 +521,7 @@ async function handleRegister(req: IncomingMessage, res: ServerResponse): Promis
       typeof body.token_endpoint_auth_method === 'string'
         ? body.token_endpoint_auth_method
         : 'none',
+    clientName: typeof body.client_name === 'string' ? body.client_name.slice(0, 80) : undefined,
   });
 
   sendJson(res, 201, {
@@ -424,21 +592,38 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
     return;
   }
 
-  const client = clients.get(clientId);
-  if (client && !client.redirectUris.includes(redirectUri)) {
-    // Allow Claude callbacks even if registration race; still prefer registered list.
-    const allowed =
-      redirectUri.startsWith('https://claude.ai/') ||
-      redirectUri.startsWith('http://127.0.0.1:') ||
-      redirectUri.startsWith('http://localhost:');
-    if (!allowed) {
-      sendJson(res, 400, { error: 'invalid_redirect_uri' });
-      return;
-    }
+  // A code must only ever go to a callback this client registered, or to a known AI app.
+  // Unknown clients used to skip this check entirely.
+  const client = await resolveClient(clientId);
+  if (!isRedirectAllowed(client, redirectUri)) {
+    sendJson(res, 400, { error: 'invalid_redirect_uri' });
+    return;
+  }
+
+  // "Cancel" on the dashboard consent page.
+  if (req.method === 'POST' && params.get('deny') === '1') {
+    const url = new URL(redirectUri);
+    url.searchParams.set('error', 'access_denied');
+    if (state) url.searchParams.set('state', state);
+    res.writeHead(302, { Location: url.toString() });
+    res.end();
+    return;
   }
 
   const secret = workspaceSecretParam || fromResource.secret;
-  const region = fromResource.region;
+  const region = normalizeRegionParam(params.get('region')) || fromResource.region;
+
+  // No secret on the official host: sign in with a Convocore account instead of pasting one.
+  // `manual=1` keeps the paste form reachable (self-hosters, scripts).
+  if (!secret && !grayLabel && req.method === 'GET' && params.get('manual') !== '1') {
+    const consent = new URL(`${consoleOriginFor(requestHost(req))}/app/mcp-authorize`);
+    for (const [k, v] of params.entries()) consent.searchParams.set(k, v);
+    consent.searchParams.set('mcp_origin', publicBaseUrl(req));
+    if (client?.clientName) consent.searchParams.set('client_name', client.clientName);
+    res.writeHead(302, { Location: consent.toString() });
+    res.end();
+    return;
+  }
 
   if (!secret) {
     const missing = grayLabel ? 'Connection token is required.' : 'Workspace secret is required.';
@@ -485,6 +670,20 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
   // POST continues to issue the auth code.
   if (req.method === 'GET') {
     sendHtml(res, 200, connectOnlyHtml(params, secret, displayName, brand));
+    return;
+  }
+
+  if (!grayLabel && !(await secretValidator(secret, region))) {
+    sendHtml(
+      res,
+      401,
+      authorizeFormHtml(
+        params,
+        displayName,
+        'That workspace secret was not accepted. Copy it again from Account → API Secrets.',
+        brand
+      )
+    );
     return;
   }
 
@@ -615,6 +814,12 @@ export function __resetHostedOAuthForTests(): void {
   clients.clear();
   authCodes.clear();
   refreshTokens.clear();
+  cimdCache.clear();
+  secretValidator = defaultSecretValidator;
+}
+
+export function __setSecretValidatorForTests(fn: SecretValidator): void {
+  secretValidator = fn;
 }
 
 export function __pkceS256ForTests(verifier: string): string {

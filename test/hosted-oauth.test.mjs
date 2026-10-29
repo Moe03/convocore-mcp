@@ -4,9 +4,17 @@ import { describe, it, before, after } from 'node:test';
 import {
   __pkceS256ForTests,
   __resetHostedOAuthForTests,
+  __setSecretValidatorForTests,
   handleHostedOAuth,
+  isRedirectAllowed,
   publicBaseUrl,
 } from '../dist/hosted-oauth.js';
+
+/** Secrets the stubbed API accepts; anything else is a 401. */
+const VALID_SECRETS = new Set(['vg_oauth_secret', 'vg_good_secret']);
+function stubSecretCheck() {
+  __setSecretValidatorForTests(async (secret) => VALID_SECRETS.has(secret));
+}
 
 function normalizePath(url) {
   const q = url.indexOf('?');
@@ -60,6 +68,7 @@ describe('hosted-oauth', () => {
 
   it('Connect page + token exchange when resource has /t/<secret>/mcp path', async () => {
     __resetHostedOAuthForTests();
+    stubSecretCheck();
     const { encodePathSecret } = await import('../dist/connector-url.js');
     const reg = await fetch(`${base}/oauth/register`, {
       method: 'POST',
@@ -128,6 +137,159 @@ describe('hosted-oauth', () => {
     assert.ok(tokens.refresh_token);
   });
 
+  const CLAUDE_CB = 'https://claude.ai/api/mcp/auth_callback';
+  function authParams(clientId, extra = {}) {
+    return {
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: CLAUDE_CB,
+      code_challenge: __pkceS256ForTests('b'.repeat(64)),
+      code_challenge_method: 'S256',
+      state: 'st1',
+      resource: `${base}/mcp`,
+      ...extra,
+    };
+  }
+
+  it('rejects an unknown client sending the code to an arbitrary site', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(
+        authParams('made-up-client', { redirect_uri: 'https://evil.example/cb', workspace_secret: 'vg_good_secret' })
+      ),
+    });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, 'invalid_redirect_uri');
+  });
+
+  it('rejects a registered client using a callback it did not register', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const reg = await fetch(`${base}/oauth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: ['https://app.example/cb'] }),
+    });
+    const { client_id } = await reg.json();
+    const res = await fetch(
+      `${base}/oauth/authorize?${new URLSearchParams(authParams(client_id, { redirect_uri: 'https://evil.example/cb' }))}`,
+      { redirect: 'manual' }
+    );
+    assert.equal(res.status, 400);
+  });
+
+  it('still lets a client we lost after a restart finish on a known AI app callback', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(authParams('lost-after-restart', { workspace_secret: 'vg_good_secret' })),
+    });
+    assert.equal(res.status, 302);
+    assert.ok(res.headers.get('location').startsWith(CLAUDE_CB + '?code='));
+  });
+
+  it('sends a plain-URL connection to the dashboard to sign in, carrying every OAuth param', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const reg = await fetch(`${base}/oauth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_name: 'Claude', redirect_uris: [CLAUDE_CB] }),
+    });
+    const { client_id } = await reg.json();
+    const res = await fetch(`${base}/oauth/authorize?${new URLSearchParams(authParams(client_id))}`, {
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 302);
+    const loc = new URL(res.headers.get('location'));
+    assert.equal(loc.origin + loc.pathname, 'https://convocore.app/app/mcp-authorize');
+    assert.equal(loc.searchParams.get('client_id'), client_id);
+    assert.equal(loc.searchParams.get('redirect_uri'), CLAUDE_CB);
+    assert.equal(loc.searchParams.get('state'), 'st1');
+    assert.equal(loc.searchParams.get('mcp_origin'), base.replace('http://', 'https://'));
+    assert.equal(loc.searchParams.get('client_name'), 'Claude');
+  });
+
+  it('keeps the paste form reachable with manual=1', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await fetch(
+      `${base}/oauth/authorize?${new URLSearchParams(authParams('c1', { manual: '1' }))}`,
+      { redirect: 'manual' }
+    );
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /workspace_secret/);
+  });
+
+  it('rejects a secret the API does not accept, without echoing it back', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(authParams('c1', { workspace_secret: 'vg_typo' })),
+    });
+    assert.equal(res.status, 401);
+    const html = await res.text();
+    assert.match(html, /not accepted/);
+    assert.doesNotMatch(html, /vg_typo/);
+  });
+
+  it('issues a code for the dashboard-approved secret and keeps its region', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const verifier = 'b'.repeat(64);
+    const post = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(authParams('c1', { workspace_secret: 'vg_good_secret', region: 'na' })),
+    });
+    assert.equal(post.status, 302);
+    const code = new URL(post.headers.get('location')).searchParams.get('code');
+    const tok = await fetch(`${base}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: CLAUDE_CB,
+        code_verifier: verifier,
+      }),
+    });
+    assert.equal(tok.status, 200);
+    assert.equal((await tok.json()).access_token, 'vg_good_secret');
+  });
+
+  it('Cancel on the consent page returns access_denied to the client', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(authParams('c1', { deny: '1' })),
+    });
+    assert.equal(res.status, 302);
+    const loc = new URL(res.headers.get('location'));
+    assert.equal(loc.searchParams.get('error'), 'access_denied');
+    assert.equal(loc.searchParams.get('state'), 'st1');
+  });
+
+  it('advertises Client ID Metadata Documents', async () => {
+    const meta = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+    assert.equal(meta.client_id_metadata_document_supported, true);
+    assert.ok(meta.token_endpoint_auth_methods_supported.includes('none'));
+  });
+
   it('serves authorization server metadata', async () => {
     const res = await fetch(`${base}/.well-known/oauth-authorization-server`);
     assert.equal(res.status, 200);
@@ -151,5 +313,23 @@ describe('public MCP hosts', () => {
       if (prev === undefined) delete process.env.CONVOCORE_PUBLIC_BASE_URL;
       else process.env.CONVOCORE_PUBLIC_BASE_URL = prev;
     }
+  });
+});
+
+describe('redirect rules', () => {
+  const reg = { clientId: 'x', redirectUris: ['http://127.0.0.1/callback', 'https://app.example/cb'], tokenEndpointAuthMethod: 'none' };
+  it('matches loopback callbacks on any port (Claude Code)', () => {
+    assert.equal(isRedirectAllowed(reg, 'http://127.0.0.1:53111/callback'), true);
+    assert.equal(isRedirectAllowed(undefined, 'http://localhost:3118/callback'), true);
+  });
+  it('allows exactly what a client registered', () => {
+    assert.equal(isRedirectAllowed(reg, 'https://app.example/cb'), true);
+    assert.equal(isRedirectAllowed(reg, 'https://app.example/other'), false);
+  });
+  it('only allows known AI app callbacks for unknown clients', () => {
+    assert.equal(isRedirectAllowed(undefined, 'https://claude.ai/api/mcp/auth_callback'), true);
+    assert.equal(isRedirectAllowed(undefined, 'https://chatgpt.com/connector_platform_oauth_redirect'), true);
+    assert.equal(isRedirectAllowed(undefined, 'https://evil.example/cb'), false);
+    assert.equal(isRedirectAllowed(undefined, 'https://claude.ai.evil.example/cb'), false);
   });
 });
