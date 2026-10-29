@@ -3,7 +3,7 @@
   "name": "io.github.Moe03/convocore",
   "title": "Convocore",
   "description": "Build, test and manage customer-facing AI voice and chat agents (web, WhatsApp, phone) from chat.",
-  "version": "2.6.15",
+  "version": "2.6.16",
   "websiteUrl": "https://convocore.ai",
   "repository": {
     "url": "https://github.com/Moe03/convocore-mcp",
@@ -12,7 +12,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://mcp.convocore.ai/mcp"
+      "url": "https://mcp.convocore.app/mcp"
     }
   ]
 }
