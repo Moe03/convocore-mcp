@@ -10,7 +10,7 @@ listing is auto-scanned and published as a **Community** connector; escalations 
 - [x] Every tool has `annotations.title` plus `readOnlyHint` / `destructiveHint`
       (`test/tool-annotations.test.mjs` enforces it). Live since hosted 2.6.17.
 - [x] Account sign-in: a plain-URL connection is sent to the Convocore dashboard
-      (`/app/mcp-authorize`) to sign in and click Allow for the signed-in workspace (no picker yet). The backend
+      (`/app/mcp-authorize`) to sign in, pick a workspace they administer (EU or NA) and click Allow. The backend
       (`mcpOAuthApprove`) creates a dedicated, revocable workspace secret and posts it to `/oauth/approve`. Shipped in 2.6.16 / 2.6.17
       (convocore-mcp PRs #1 and #2).
 - [x] Strict redirects: an unknown `client_id` may only use known AI-app and loopback callbacks
@@ -119,7 +119,7 @@ Meta pages, email domains) are connected in the Convocore dashboard; the connect
 - Authentication requirement: **Required**.
 - Method: **OAuth 2.0** with dynamic client registration (Claude registers itself; leave client ID / secret
   empty, don't ask Anthropic to hold a client).
-- Users sign in with their Convocore account on the dashboard consent page and approve their current workspace. Each
+- Users sign in with their Convocore account on the dashboard consent page and pick the workspace to connect. Each
   connection gets its own revocable secret in Account → API Secrets. The paste form is still reachable with
   `manual=1` for self-hosters.
 
@@ -146,7 +146,8 @@ Account: test-claude-reviewer@convocore.app (White Label Elite plan, credits pre
    (or connect from the directory listing). Leave OAuth Client ID / Secret empty.
 2. Claude opens the Convocore sign-in page. Enter test-claude-reviewer@convocore.app and click Continue.
 3. When asked for the email code, enter 017766 (fixed code for this review account; no inbox needed).
-4. On the "Allow Claude to access your workspace" screen, click Allow. You are returned to Claude.
+4. On "Allow Claude to use Convocore?", pick the workspace (pre-selected if there is only one) and click
+   Allow. You are returned to Claude.
 5. Try:
    - "List my Convocore agents"
    - "Show the last 5 conversations of <agent>"
