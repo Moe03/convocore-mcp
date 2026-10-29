@@ -16,7 +16,7 @@ listing is auto-scanned and published as a **Community** connector; escalations 
 - [x] Strict redirects: an unknown `client_id` may only use known AI-app and loopback callbacks
       (`isRedirectAllowed` in `src/hosted-oauth.ts`).
 - [ ] Test every tool from Claude as a custom connector (step 8 asks you to confirm this).
-- [ ] Reviewer test account populated (step 8).
+- [ ] Reviewer test account (test-claude-reviewer@convocore.app) populated with synthetic data (step 8).
 - [ ] Square icon (see step 3).
 
 ## 1. Connection
@@ -32,7 +32,7 @@ Transport is Streamable HTTP; OAuth discovery is at `/.well-known/oauth-authoriz
 ## 2. Tools
 
 Synced from the server. The hosted catalog hides the local-machine tools (`run_command`, `read_*`, `inspect_file`,
-`import_file_to_kb`), so the portal sees ~138 tools. Read-only vs write grouping comes from the annotations.
+`import_file_to_kb`), so the portal sees ~137 tools. Read-only vs write grouping comes from the annotations.
 
 Tools that both read and change data depending on their `action` argument. All are annotated
 `destructiveHint: true` because at least one action deletes, overwrites or has a real-world effect; mention this
@@ -137,21 +137,31 @@ results (`src/telemetry.ts`), and is sent to the caller's own Convocore region.
 
 ## 8. Test & launch
 
-**TODO, fill in before submitting** (only reviewers see this):
+Paste into the portal (only reviewers see this):
 
 ```
+Account: test-claude-reviewer@convocore.app (White Label Elite plan, credits preloaded)
+
 1. In Claude: Settings → Connectors → Add custom connector → https://mcp.convocore.ai/mcp
-   (or install from the directory listing once it is live).
-2. When the Convocore page opens:
-   sign in as <reviewer email> / <password>, click Allow.
-3. Try: "List my Convocore agents", "Show the last 5 conversations of <agent>",
-   "Add the page <url> to <agent>'s knowledge base", "Chat with <agent>: what are your opening hours?"
+   (or connect from the directory listing). Leave OAuth Client ID / Secret empty.
+2. Claude opens the Convocore sign-in page. Enter test-claude-reviewer@convocore.app and click Continue.
+3. When asked for the email code, enter 017766 (fixed code for this review account; no inbox needed).
+4. On the "Allow Claude to access your workspace" screen, click Allow. You are returned to Claude.
+5. Try:
+   - "List my Convocore agents"
+   - "Show the last 5 conversations of <agent>"
+   - "Add https://example.com/faq to <agent>'s knowledge base"
+   - "Chat with <agent>: what are your opening hours?"
+   - "Show this month's usage and credits"
 ```
 
-Reviewer account must be **fully populated**: Business plan, 2–3 agents with prompts and KB docs, real-looking
-conversations, leads and a lead group, a custom metric, usage history. Use synthetic data only. Revoke the
-connection's secret in Account → API Secrets after review. Avoid giving it a connected
-phone number / WhatsApp number with credit, since `start_outbound_call`, `send_sms` and campaigns act for real.
+The fixed code only works for that one email (`isReviewerLoginCode` in
+`custom-vf-nextjs/src/app/api/utils/adminBypassAuth.ts`, PR vectorwizards-hq/Convocore#2402). Remove it once
+reviewers no longer need the account.
+
+**TODO before submitting:** populate the account with synthetic data: 2–3 agents with prompts and KB docs,
+conversations, leads and a lead group, a custom metric. Replace `<agent>` above with a real agent name.
+Don't connect a phone or WhatsApp number to it: `start_outbound_call`, `send_sms` and campaigns act for real.
 
 Confirm "I've run every tool" only after running them as a custom connector in Claude or through MCP Inspector.
 
