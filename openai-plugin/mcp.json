@@ -3,7 +3,18 @@
   "mcpServers": {
     "convocore": {
       "type": "streamable-http",
-      "url": "https://mcp.convocore.ai/mcp"
+      "url": "https://mcp.convocore.ai/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": { "mode": "cimd" },
+            "registrationUrl": "https://mcp.convocore.ai/oauth/register",
+            "resource": "https://mcp.convocore.ai/mcp",
+            "baseScopes": ["mcp", "convocore"]
+          }
+        }
+      }
     }
   }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "convocore",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Build, edit and run Convocore AI chat and voice agents: prompts, knowledge bases, conversations, leads, calls, WhatsApp and analytics, through Convocore's own API.",
   "author": {
     "name": "VECTOR WIZARDS LLC",
