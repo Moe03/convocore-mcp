@@ -284,6 +284,58 @@ describe('hosted-oauth', () => {
     assert.equal(loc.searchParams.get('state'), 'st1');
   });
 
+  async function approve(body, origin = 'https://convocore.app') {
+    return fetch(`${base}/oauth/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('approve: returns the callback with a code instead of redirecting (CSP-safe)', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const verifier = 'b'.repeat(64);
+    const res = await approve({ ...authParams('c1'), workspace_secret: 'vg_good_secret', region: 'eu' });
+    assert.equal(res.status, 200);
+    const { redirect } = await res.json();
+    const cb = new URL(redirect);
+    assert.equal(cb.origin + cb.pathname, CLAUDE_CB);
+    assert.equal(cb.searchParams.get('state'), 'st1');
+    const tok = await fetch(`${base}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: cb.searchParams.get('code'), redirect_uri: CLAUDE_CB, code_verifier: verifier }),
+    });
+    assert.equal((await tok.json()).access_token, 'vg_good_secret');
+  });
+
+  it('approve: works for Claude Code loopback callbacks', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const res = await approve({ ...authParams('c1', { redirect_uri: 'http://localhost:53111/callback' }), workspace_secret: 'vg_good_secret' });
+    assert.equal(res.status, 200);
+    assert.ok((await res.json()).redirect.startsWith('http://localhost:53111/callback?'));
+  });
+
+  it('approve: cancel returns access_denied', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    const { redirect } = await (await approve({ ...authParams('c1'), deny: '1' })).json();
+    assert.equal(new URL(redirect).searchParams.get('error'), 'access_denied');
+  });
+
+  it('approve: rejects other origins, bad secrets and foreign callbacks', async () => {
+    __resetHostedOAuthForTests();
+    stubSecretCheck();
+    assert.equal((await approve({ ...authParams('c1'), workspace_secret: 'vg_good_secret' }, 'https://evil.example')).status, 403);
+    assert.equal((await approve({ ...authParams('c1'), workspace_secret: 'vg_typo' })).status, 401);
+    assert.equal(
+      (await approve({ ...authParams('madeup', { redirect_uri: 'https://evil.example/cb' }), workspace_secret: 'vg_good_secret' })).status,
+      400
+    );
+  });
+
   it('advertises Client ID Metadata Documents', async () => {
     const meta = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
     assert.equal(meta.client_id_metadata_document_supported, true);
