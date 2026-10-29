@@ -132,7 +132,7 @@ const tools: Tool[] = [
       'Patch an existing Convocore agent HTTP tool by toolId. Pass only fields to change inside tool{}.',
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },

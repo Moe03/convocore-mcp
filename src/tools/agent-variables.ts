@@ -117,7 +117,7 @@ const tools: Tool[] = [
     description: 'Patch an existing Convocore agent variable by variableId. Pass only fields to change. Never send back a masked env value as defaultValue — omit it to keep the stored value.',
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },

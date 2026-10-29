@@ -100,7 +100,7 @@ const tools: Tool[] = [
       'The response carries warnings when the saved combination would keep the AI silent — relay them to the user.',
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },

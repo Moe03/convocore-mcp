@@ -59,7 +59,7 @@ const tools: Tool[] = [
       'Check one HTTP/API action configured on a Convocore agent. mode=validate checks the action\'s setup; mode=generate-and-test has the agent fill in sample inputs and then calls the action\'s URL once, so the remote API may record that request.',
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: true,
     },

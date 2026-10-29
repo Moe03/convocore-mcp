@@ -74,7 +74,7 @@ export const CORE_TOOL_HINTS: Record<string, Tool['annotations']> = {
   release_twilio_number: DESTRUCTIVE,
   check_twilio_number: EDIT,
   sync_sms_twilio_number: EDIT,
-  interact_with_agent: EDIT,
+  interact_with_agent: DESTRUCTIVE,
   get_ui_engine_spec: READ,
   get_channel_integration_spec: READ,
   get_pricing_info: READ,
