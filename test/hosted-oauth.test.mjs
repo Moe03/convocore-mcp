@@ -209,7 +209,7 @@ describe('hosted-oauth', () => {
     });
     assert.equal(res.status, 302);
     const loc = new URL(res.headers.get('location'));
-    assert.equal(loc.origin + loc.pathname, 'https://convocore.app/app/mcp-authorize');
+    assert.equal(loc.origin + loc.pathname, 'https://convocore.app/mcp/authorize');
     assert.equal(loc.searchParams.get('client_id'), client_id);
     assert.equal(loc.searchParams.get('redirect_uri'), CLAUDE_CB);
     assert.equal(loc.searchParams.get('state'), 'st1');
