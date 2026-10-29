@@ -3698,9 +3698,9 @@ const coreTools: Tool[] = [
   {
     name: 'list_conversations',
     description:
-      'List conversations for an agent (newest first). Default mode=compact (id/ts/summary/user/origin — no messages). ' +
-      'mode=full returns raw list rows. For message bodies use get_conversation or get_conversations_bulk. ' +
-      'Cursor pagination: hasMore + nextCursor; do NOT bump page alone. Max limit=20.',
+      'List an agent\'s conversations, newest first, up to 20 per page. Each row has the conversation ID, time, ' +
+      'the stored summary (if one was generated), the user and the channel; message bodies are not included (get_conversation returns them). ' +
+      'mode=full returns the complete list rows. Page with the returned nextCursor while hasMore is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4866,15 +4866,12 @@ const coreTools: Tool[] = [
   {
     name: 'interact_with_agent',
     description:
-      "Run ONE agent turn over the Convocore /interact WebSocket and return the streamed result aggregated into a single response. " +
-      "Opens a WSS connection to wss://<region>-gcp-api.vg-stuff.com/interact, sends one InteractObject (agentId + convoId + bucket + prompt + optional context), " +
-      "collects every chunk (text + UI-engine + actions + metadata + sync_chat_history) until the server closes (code 1000) or the timeout fires, then returns: " +
-      "{ assistantText, uiEngineEnabled, uiEngineSnapshot, uiEngineSummary, actions, metadata, turns, closeCode, durationMs, timedOut, chunkCount, chunks? }.\n\n" +
+      "Send one test message to one of the user's Convocore agents and return the agent's reply, exactly as a customer chatting with it would see it. " +
+      "The agent answers with its own prompt, knowledge base and tools, so a turn can run the agent's configured actions (bookings, lookups) and spends credits like a real chat. " +
+      "Returns { assistantText, uiEngineEnabled, uiEngineSnapshot, uiEngineSummary, actions, metadata, turns, durationMs, timedOut }.\n\n" +
       "USAGE:\n" +
       "- Use the SAME `convoId` across turns to keep history; use a fresh one to start a new conversation.\n" +
       "- `prompt: \"start\"` triggers the agent's initial greeting (no user message added).\n" +
-      "- `prompt: \"@cancel:<reason>\"` cancels an in-flight turn (rarely useful from a single MCP call).\n" +
-      "- `prompt: \"@rewind:<nodeId>\"` rewinds a node-based agent.\n" +
       "- For images, set messageType=\"visual\" and pass `visualPayload`.\n" +
       "- `bucket` is auto-derived from CONVOCORE_API_REGION; only override if you really mean to talk to the other region.\n" +
       "- Set `raw: true` to include every streamed chunk (debug frames, chunkIndex, every UI Engine snapshot, etc.) when you need the full trace. Default keeps the response token-cheap.\n" +

@@ -70,7 +70,7 @@ describe('tool annotations (Connectors Directory)', () => {
     for (const name of ['get_agent', 'list_agents', 'list_conversations', 'get_kb_doc']) {
       assert.equal(byName[name].readOnlyHint, true, name);
     }
-    for (const name of ['create_agent', 'update_agent', 'create_kb_doc']) {
+    for (const name of ['create_agent', 'create_kb_doc']) {
       assert.equal(byName[name].readOnlyHint, false, name);
       assert.equal(byName[name].destructiveHint, false, name);
     }

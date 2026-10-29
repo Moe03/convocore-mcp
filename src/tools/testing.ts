@@ -56,7 +56,7 @@ const tools: Tool[] = [
   {
     name: 'test_agent_tool',
     description:
-      'Test a Convocore agent HTTP tool via interact WebSocket toolTest mode (validate | generate-and-test). Runs through the agent runtime. For a direct HTTP dry-run against serverUrl use test_agent_tool_request. For multi-turn suites use run_agent_auto_test.',
+      'Check one HTTP/API action configured on a Convocore agent. mode=validate checks the action\'s setup; mode=generate-and-test has the agent fill in sample inputs and then calls the action\'s URL once, so the remote API may record that request.',
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

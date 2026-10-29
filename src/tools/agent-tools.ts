@@ -64,7 +64,7 @@ const tools: Tool[] = [
   {
     name: 'list_agent_tools',
     description:
-      'List HTTP/API tools saved on a Convocore agent (serverUrl integrations). These are NOT MCP tools. A saved tool is only callable when its id is also in a node toolsIds (see get_agent). For MCP catalog discovery use search_mcp_tools. To test a tool use test_agent_tool or test_agent_tool_request.',
+      'List the HTTP/API actions configured on a Convocore agent (the integrations the agent itself can call while chatting with customers, each with a name, URL and method). Read-only: returns the saved configuration and never calls the URLs. These are agent settings, not tools of this connector. An action is active only when its id is in a node toolsIds (see get_agent).',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -80,7 +80,7 @@ const tools: Tool[] = [
   {
     name: 'get_agent_tool',
     description:
-      'Get one Convocore agent HTTP tool by toolId (includes fields, serverUrl, method). Does not call the remote URL — use test_agent_tool_request for that.',
+      'Get the saved configuration of one HTTP/API action on a Convocore agent by toolId: its fields, URL and method. Read-only: it never calls the URL.',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
