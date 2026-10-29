@@ -146,7 +146,7 @@ Account: test-claude-reviewer@convocore.app (White Label Elite plan, credits pre
    (or connect from the directory listing). Leave OAuth Client ID / Secret empty.
 2. Claude opens the Convocore sign-in page. Enter test-claude-reviewer@convocore.app and click Continue.
 3. When asked for the email code, enter 017766 (fixed code for this review account; no inbox needed).
-4. On "Allow Claude to use Convocore?", pick the workspace (pre-selected if there is only one) and click
+4. On "Allow Claude to use Convocore?", pick the review workspace and click
    Allow. You are returned to Claude.
 5. Try:
    - "List my Convocore agents"
