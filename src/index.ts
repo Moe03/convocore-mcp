@@ -5112,6 +5112,10 @@ const HOST_LOCAL_TOOLS = new Set([
   'import_file_to_kb',
 ]);
 
+// Also hidden on the hosted server, which public plugin directories list: plan/pricing quotes
+// (directories forbid promoting plans) and the Twilio import, whose payload carries an auth token.
+const HOSTED_HIDDEN_TOOLS = new Set([...HOST_LOCAL_TOOLS, 'get_pricing_info', 'import_twilio_number']);
+
 
 /**
  * additionalConfig is the only free-form entry point of update_agent. The backend answers unknown keys with a 400
@@ -5187,7 +5191,7 @@ const grayLabelSearchHandler = grayLabelTools
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   if (grayLabelTools) return { tools: grayLabelTools };
-  return { tools: options?.hosted ? tools.filter((t) => !HOST_LOCAL_TOOLS.has(t.name)) : tools };
+  return { tools: options?.hosted ? tools.filter((t) => !HOSTED_HIDDEN_TOOLS.has(t.name)) : tools };
 });
 
 // ==================== MCP PROMPTS ====================
@@ -5363,6 +5367,13 @@ const handleCallTool = async (request: CallToolRequest) => {
       ],
     };
   }
+  if (options?.hosted && HOSTED_HIDDEN_TOOLS.has(name)) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: `The tool "${name}" is not available on the hosted server. Use the Convocore dashboard instead.` }],
+    };
+  }
+
 
   try {
     const domainHandler = domainHandlerMap[name];

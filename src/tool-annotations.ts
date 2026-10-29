@@ -250,7 +250,32 @@ export const TOOL_TITLES: Record<string, string> = {
   search_mcp_tools: 'Search tools',
 };
 
-/** Fill in title (and hints for core tools) without overriding what a tool already declares. */
+/**
+ * Tools that reach the public web or contact people outside the workspace (fetch arbitrary URLs, place calls,
+ * send SMS / WhatsApp / email). Every other tool only touches the caller's own Convocore workspace, so it is
+ * openWorldHint: false (OpenAI's plugin review checks this; the domain modules' presets say true for all).
+ */
+export const OPEN_WORLD_TOOLS = new Set([
+  'scrape_url',
+  'create_kb_from_urls',
+  'create_kb_doc',
+  'bulk_create_kb_docs',
+  'test_agent_tool',
+  'test_agent_tool_request',
+  'integrations_test',
+  'code_tools',
+  'start_outbound_call',
+  'send_sms',
+  'contact_leads',
+  'send_channel_message',
+  'campaigns_write',
+  'whatsapp_campaigns_write',
+  'email_channel_write',
+  'notification_email',
+  'sms_numbers_write',
+]);
+
+/** Fill in title (and hints for core tools) without overriding what a tool already declares; openWorldHint is set here. */
 export function withToolAnnotations(tool: Tool): Tool {
   const title = tool.annotations?.title ?? TOOL_TITLES[tool.name];
   return {
@@ -259,6 +284,7 @@ export function withToolAnnotations(tool: Tool): Tool {
       ...CORE_TOOL_HINTS[tool.name],
       ...tool.annotations,
       ...(title ? { title } : {}),
+      openWorldHint: OPEN_WORLD_TOOLS.has(tool.name),
     },
   };
 }

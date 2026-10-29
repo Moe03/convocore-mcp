@@ -86,10 +86,6 @@ describe('gateway-backed tools', () => {
     r = await one('workspace_read', { action: 'log', logId: 7 });
     assert.deepEqual(r.input, { id: 7 });
 
-    r = await one('workspace_write', { action: 'set_provider_keys', keys: { anthropic_api_key: 'k' } });
-    assert.equal(r.procedure, 'setupSecrets');
-    assert.deepEqual(r.input, { anthrpic_api_key: 'k' });
-
     r = await one('code_tools', { action: 'ai_edit', agentId: 'a1', code: 'return 1', userRequest: 'add tax' });
     assert.equal(r.procedure, 'codeTool.aiEdit');
     assert.deepEqual(r.input, { agentId: 'a1', userRequest: 'add tax', currentCode: 'return 1' });
@@ -127,7 +123,7 @@ describe('gateway-backed tools', () => {
       ['whatsapp_numbers_write', { action: 'constructor', agentId: 'a1', phoneId: 'p1' }],
       ['contacts_write', { action: 'merge', agentId: 'a1', sourceIdentityId: 's' }],
       ['email_channel_write', { action: 'create_inbox', domainId: 'd1' }],
-      ['workspace_write', { action: 'set_provider_keys' }],
+      ['workspace_write', { action: 'set_form_submit_emails' }],
     ]) {
       const out = await call(tool, args);
       assert.equal(out.success, false, `${tool} ${args.action}`);

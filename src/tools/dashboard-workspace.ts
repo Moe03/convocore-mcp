@@ -817,7 +817,7 @@ const specs: RpcToolSpec[] = [
     name: 'workspace_write',
     kind: 'write',
     description:
-      'Change workspace settings: name, photo and team members; form-submission notification emails on/off; the workspace\'s own AI provider keys.',
+      'Change workspace settings: name, photo and team members; form-submission notification emails on/off. AI provider keys are set on the dashboard (keys must not pass through chat).',
     properties: {
       workspaceName: { type: 'string' },
       workspacePhotoURL: { type: 'string' },
@@ -831,11 +831,6 @@ const specs: RpcToolSpec[] = [
         type: 'boolean',
         description: 'For set_form_submit_emails: false silences every "New form submitted" / rating email for all agents in the workspace. Default (unset) is on.',
       },
-      keys: {
-        type: 'object',
-        description:
-          'For set_provider_keys: e.g. { openai_api_key, anthropic_api_key, google_genai_api_key, groq_api_key, deepseek_api_key, xai_api_key, elevenlabs_api_key, deepgram_api_key, cartesia_api_key, azure_api_key, azure_region, langsmith_api_key }.',
-      },
     },
     actions: {
       update_team_profile: {
@@ -848,20 +843,6 @@ const specs: RpcToolSpec[] = [
         summary: 'turn the workspace-wide "New form submitted" / rating notification emails on or off (default on); per-agent override is vg_uiEngineFormNotifyConfig.enabled',
         required: ['formSubmitEmailsEnabled'],
         input: (a) => pick(a, 'formSubmitEmailsEnabled'),
-      },
-      set_provider_keys: {
-        procedure: 'setupSecrets',
-        summary: 'store the workspace own AI provider API keys. Keys typed in chat pass through this conversation: prefer the dashboard, and never repeat a key back',
-        required: ['keys'],
-        input: (a) => {
-          const keys: Record<string, unknown> = { ...a.keys };
-          // The API spells this field without the "o".
-          if (keys.anthropic_api_key !== undefined) {
-            keys.anthrpic_api_key = keys.anthropic_api_key;
-            delete keys.anthropic_api_key;
-          }
-          return keys;
-        },
       },
     },
   },

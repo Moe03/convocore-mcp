@@ -52,10 +52,11 @@ const LeadsSchema = z.object({
 
 const PhoneSchema = z.object({ agentId: z.string().min(1), mode: LightModeField });
 
-// These place real calls / send real messages and bill the workspace: not idempotent.
+// These place real calls / send real messages and bill the workspace: not idempotent, and a sent
+// message or placed call cannot be taken back, so they are destructive.
 const OUTBOUND_ANNOTATIONS = {
   readOnlyHint: false,
-  destructiveHint: false,
+  destructiveHint: true,
   idempotentHint: false,
   openWorldHint: true,
 } as const;

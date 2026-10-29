@@ -1,0 +1,94 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "convocore",
+  "version": "1.0.0",
+  "description": "Build, edit and run Convocore AI chat and voice agents: prompts, knowledge bases, conversations, leads, calls, WhatsApp and analytics, through Convocore's own API.",
+  "author": { "name": "VECTOR WIZARDS LLC", "email": "support@convocore.ai", "url": "https://convocore.ai" },
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Convocore",
+        "shortDescription": "Build and run AI agents",
+        "longDescription": "Convocore is a platform for AI agents that answer customers on web chat, WhatsApp, Instagram, Messenger, SMS, email and phone. This plugin gives ChatGPT the same controls as the Convocore dashboard, so you can manage your workspace in conversation.\n\nCreate an agent for a business from its website, rewrite or edit an agent's prompt, add pages and files to its knowledge base, attach HTTP tools and variables, and test the agent with a live chat turn before going live. Review conversations and transcripts, add review notes, summarize what customers asked about, and export data. Work with leads, lead groups and contacts; run outbound call and WhatsApp campaigns; check call logs, usage, credits and custom metrics. Agencies can also manage client accounts, folders and whitelabel branding.\n\nRead tools never change data. Anything that deletes, overwrites, sends a message or places a call is marked as such so ChatGPT asks before running it. Plans, numbers and payments are managed on the Convocore dashboard only.\n\nRequires a Convocore account on the Business plan or higher.",
+        "developerName": "VECTOR WIZARDS LLC",
+        "category": "Productivity",
+        "capabilities": [
+          "Create and edit AI chat and voice agents",
+          "Manage agent knowledge bases",
+          "Review and summarize conversations",
+          "Manage leads, contacts and campaigns",
+          "Read usage, credits and analytics"
+        ],
+        "websiteURL": "https://convocore.ai",
+        "supportURL": "https://convocore.ai/legal/contact",
+        "privacyPolicyURL": "https://convocore.ai/legal/privacy-policy",
+        "termsOfServiceURL": "https://convocore.ai/legal/tos",
+        "defaultPrompt": [
+          "List my Convocore agents",
+          "Summarize the last 10 conversations of my support agent",
+          "Create a customer-support agent for my website"
+        ],
+        "brandColor": "#111111",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png"
+      },
+      "onboardingSkill": "./skills/get-started/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "List the agents in the workspace",
+              "prompt": "List my Convocore agents.",
+              "tools_triggered": "list_agents",
+              "expected_behavior": "Returns the workspace's agents with their names and IDs, without changing anything."
+            },
+            {
+              "description": "Summarize recent conversations of an agent",
+              "prompt": "Show the last 5 conversations of my first agent and summarize what customers asked about.",
+              "tools_triggered": "list_agents, list_conversations, generate_conversation_summaries",
+              "expected_behavior": "Finds the agent, lists its 5 newest conversations and returns a short summary of each. Nothing is changed."
+            },
+            {
+              "description": "Create an agent from a website",
+              "prompt": "Create a customer-support agent for https://example.com called Example Support.",
+              "tools_triggered": "create_agent_from_template",
+              "expected_behavior": "Creates a new agent named Example Support based on the website and returns its ID and a link to try it."
+            },
+            {
+              "description": "Add a web page to an agent's knowledge base",
+              "prompt": "Add https://example.com/about to the knowledge base of Example Support.",
+              "tools_triggered": "list_agents, create_kb_from_urls",
+              "expected_behavior": "Adds the page as a knowledge-base document on that agent and reports its status."
+            },
+            {
+              "description": "Check usage and credits",
+              "prompt": "How many credits does my workspace have left, and which agents used the most this month?",
+              "tools_triggered": "usage_read",
+              "expected_behavior": "Returns the credit balance and the top agents by usage for the current month."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Buying a plan or credits is not supported",
+              "prompt": "Upgrade my Convocore plan and buy 10,000 more credits."
+            },
+            {
+              "description": "Unrelated request should not trigger the plugin",
+              "prompt": "What's a good recipe for banana bread?"
+            },
+            {
+              "description": "Requests about other platforms should not trigger the plugin",
+              "prompt": "Show me my Salesforce opportunities closing this week."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "No purchases, subscriptions or payments. Plans, numbers and credits are bought on the Convocore dashboard."
+      },
+      "publication": {
+        "release_notes": "Initial release."
+      }
+    }
+  }
+}

@@ -96,7 +96,7 @@ const tools: Tool[] = [
       'Push an agent-initiated message onto the conversation channel (WhatsApp, Messenger, Instagram, Telegram, SMS, Discord). Does NOT run the LLM — text is sent as-is. Subject to provider rules (e.g. Meta 24h window). Do NOT use update_conversation_messages for channel delivery (that only updates stored history).',
     annotations: {
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: true,
     },

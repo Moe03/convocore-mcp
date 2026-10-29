@@ -92,7 +92,7 @@ const tools: Tool[] = [
     name: 'send_handoff_reminder',
     description:
       'Re-send the human-handoff notification for a conversation that is waiting for a human (emails the team again). userId is the conversation / end-user id. Sends a real email.',
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       type: 'object',
       properties: {
