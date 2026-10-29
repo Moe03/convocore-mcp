@@ -616,7 +616,7 @@ async function handleAuthorize(req: IncomingMessage, res: ServerResponse): Promi
   // No secret on the official host: sign in with a Convocore account instead of pasting one.
   // `manual=1` keeps the paste form reachable (self-hosters, scripts).
   if (!secret && !grayLabel && req.method === 'GET' && params.get('manual') !== '1') {
-    const consent = new URL(`${consoleOriginFor(requestHost(req))}/app/mcp-authorize`);
+    const consent = new URL(`${consoleOriginFor(requestHost(req))}/mcp/authorize`);
     for (const [k, v] of params.entries()) consent.searchParams.set(k, v);
     consent.searchParams.set('mcp_origin', publicBaseUrl(req));
     if (client?.clientName) consent.searchParams.set('client_name', client.clientName);
