@@ -8,12 +8,13 @@ listing is auto-scanned and published as a **Community** connector; escalations 
 ## Before submitting
 
 - [x] Every tool has `annotations.title` plus `readOnlyHint` / `destructiveHint`
-      (`test/tool-annotations.test.mjs` enforces it). **Needs a redeploy of the hosted server** before the portal's
-      Tools step will see the titles.
-- [ ] Directory users connect to the bare URL, so today they get the "paste your workspace secret" form. Strongly
-      recommended to ship [the account sign-in flow](oauth-account-login-proposal.md) first; reviewers expect
-      OAuth to sign in to the service, not collect an API key.
-- [ ] Fix the unknown-`client_id` redirect check in `src/hosted-oauth.ts` (see the proposal, item 1).
+      (`test/tool-annotations.test.mjs` enforces it). Live since hosted 2.6.17.
+- [x] Account sign-in: a plain-URL connection is sent to the Convocore dashboard
+      (`/app/mcp-authorize`) to sign in and click Allow for the signed-in workspace (no picker yet). The backend
+      (`mcpOAuthApprove`) creates a dedicated, revocable workspace secret and posts it to `/oauth/approve`. Shipped in 2.6.16 / 2.6.17
+      (convocore-mcp PRs #1 and #2).
+- [x] Strict redirects: an unknown `client_id` may only use known AI-app and loopback callbacks
+      (`isRedirectAllowed` in `src/hosted-oauth.ts`).
 - [ ] Test every tool from Claude as a custom connector (step 8 asks you to confirm this).
 - [ ] Reviewer test account populated (step 8).
 - [ ] Square icon (see step 3).
@@ -86,8 +87,8 @@ communication, developer tools (whichever of these the portal offers).
 | Icon | **TODO:** square PNG of the current Convocore mark (≥512 px, transparent or solid background). `custom-vf-nextjs/public/sq_logo.png` is the old "glow" mark; don't use it. |
 | URL slug | `convocore` (**permanent once published**) |
 
-The setup guide currently tells users to paste a workspace secret if a Convocore page asks for one. Update that
-section if the sign-in flow ships.
+**TODO:** the setup guide still tells users to paste a workspace secret if a Convocore page asks for one.
+Update it to describe the sign-in and Allow step.
 
 ## 4. Use cases
 
@@ -118,8 +119,9 @@ Meta pages, email domains) are connected in the Convocore dashboard; the connect
 - Authentication requirement: **Required**.
 - Method: **OAuth 2.0** with dynamic client registration (Claude registers itself; leave client ID / secret
   empty, don't ask Anthropic to hold a client).
-- Today the authorize page asks for the workspace secret when none is in the URL. With the proposed flow it
-  becomes a Convocore sign-in plus a workspace picker.
+- Users sign in with their Convocore account on the dashboard consent page and approve their current workspace. Each
+  connection gets its own revocable secret in Account → API Secrets. The paste form is still reachable with
+  `manual=1` for self-hosters.
 
 ## 7. Data handling
 
@@ -141,15 +143,14 @@ results (`src/telemetry.ts`), and is sent to the caller's own Convocore region.
 1. In Claude: Settings → Connectors → Add custom connector → https://mcp.convocore.ai/mcp
    (or install from the directory listing once it is live).
 2. When the Convocore page opens:
-   - [with sign-in flow] sign in as <reviewer email> / <password>, pick workspace "<name>", click Allow.
-   - [today] paste this workspace secret: <dedicated reviewer secret from Account → API Secrets>, click Connect.
+   sign in as <reviewer email> / <password>, click Allow.
 3. Try: "List my Convocore agents", "Show the last 5 conversations of <agent>",
    "Add the page <url> to <agent>'s knowledge base", "Chat with <agent>: what are your opening hours?"
 ```
 
 Reviewer account must be **fully populated**: Business plan, 2–3 agents with prompts and KB docs, real-looking
-conversations, leads and a lead group, a custom metric, usage history. Use synthetic data only. Give it a
-dedicated API secret named "Anthropic review" so it can be revoked after review. Avoid giving it a connected
+conversations, leads and a lead group, a custom metric, usage history. Use synthetic data only. Revoke the
+connection's secret in Account → API Secrets after review. Avoid giving it a connected
 phone number / WhatsApp number with credit, since `start_outbound_call`, `send_sms` and campaigns act for real.
 
 Confirm "I've run every tool" only after running them as a custom connector in Claude or through MCP Inspector.
