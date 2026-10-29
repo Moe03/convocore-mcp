@@ -407,9 +407,13 @@ export class ConvocoreClient {
       page: page.toString(),
       limit: limit.toString(),
       sortBy,
-      starredOnly: starredOnly.toString(),
     });
-    
+    // Only send when true: the API's query parser coerces "false" with Boolean(),
+    // which turned every search into starred-only (usually zero results).
+    if (starredOnly) {
+      params.append('starredOnly', 'true');
+    }
+
     if (search) {
       params.append('search', search);
     }
