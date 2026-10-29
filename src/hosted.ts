@@ -583,6 +583,13 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  // OpenAI plugin directory domain verification for mcp.convocore.ai: the token alone, as plain text.
+  if (req.method === 'GET' && pathname === '/.well-known/openai-apps-challenge') {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('uxXiM_BooIBrOR7PEB7S36-35RKLubPmyOiw7oXzVkE');
+    return;
+  }
+
   if (req.method === 'GET' && (pathname === '/health' || pathname === '/') && isGrayLabelRequest(req)) {
     sendJson(res, 200, { ok: true, service: 'mcp', path: MCP_PATH });
     return;
