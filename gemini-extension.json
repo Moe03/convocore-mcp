@@ -1,0 +1,12 @@
+{
+  "name": "convocore-mcp",
+  "version": "1.0.0",
+  "description": "Build, edit and run Convocore AI chat and voice agents: prompts, knowledge bases, conversations, leads, calls, WhatsApp and analytics. Sign in with your Convocore account.",
+  "mcpServers": {
+    "convocore": {
+      "httpUrl": "https://mcp.convocore.ai/mcp",
+      "timeout": 120000
+    }
+  },
+  "contextFileName": "GEMINI.md"
+}

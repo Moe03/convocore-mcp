@@ -193,6 +193,14 @@ node dist/index.js
 
 ## Connecting MCP hosts
 
+### Gemini CLI
+
+Install the extension (uses the hosted server; the first tool call opens a browser to sign in with your Convocore account):
+
+```bash
+gemini extensions install https://github.com/Moe03/convocore-mcp
+```
+
 ### Claude Desktop
 
 Config path:
