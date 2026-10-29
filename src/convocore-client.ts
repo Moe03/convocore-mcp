@@ -1454,20 +1454,6 @@ export class ConvocoreClient {
   // ==================== TWILIO NUMBER METHODS ====================
 
   /**
-   * Buy a new Twilio number from the platform's Twilio account.
-   */
-  async buyTwilioNumber(
-    number: string,
-    agentId?: string,
-    capabilities: Array<'voice' | 'sms'> = ['voice', 'sms']
-  ): Promise<any> {
-    return this.request<any>('/utils/buy-twilio-number', {
-      method: 'POST',
-      body: JSON.stringify({ number, agentId, capabilities }),
-    });
-  }
-
-  /**
    * Import a Twilio number you already own into the workspace using your own
    * Twilio account credentials.
    */

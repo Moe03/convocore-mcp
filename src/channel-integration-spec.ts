@@ -263,7 +263,6 @@ export const CHANNEL_INTEGRATION_SPEC = {
     note:
       'SMS is separate from WhatsApp. Do not use Twilio SMS tools to configure WhatsApp Cloud API numbers, even if the same human phone number conceptually exists in both systems.',
     currentMcpTools: [
-      'buy_twilio_number',
       'import_twilio_number',
       'release_twilio_number',
       'check_twilio_number',

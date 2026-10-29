@@ -1384,21 +1384,6 @@ const GetVoiceSchema = z.object({
     .describe('The provider-specific voice ID (e.g. "21m00Tcm4TlvDq8ikWAM" for ElevenLabs Rachel).'),
 });
 
-const BuyTwilioNumberSchema = z.object({
-  number: z
-    .string()
-    .describe('The phone number to buy in E.164 format with the leading + and no spaces, e.g. "+14155551234".'),
-  agentId: z
-    .string()
-    .optional()
-    .describe('Optional agent ID to assign the number to. Leave empty to assign later.'),
-  capabilities: z
-    .array(z.enum(['voice', 'sms']))
-    .optional()
-    .default(['voice', 'sms'])
-    .describe('Which capabilities to enable. Default: ["voice", "sms"].'),
-});
-
 const ImportTwilioNumberSchema = z.object({
   payload: z
     .record(z.any())
@@ -4828,30 +4813,6 @@ const coreTools: Tool[] = [
     },
   },
   {
-    name: 'buy_twilio_number',
-    description:
-      "Purchase a new Twilio phone number from Convocore's Twilio account and assign it to the workspace for SMS/voice. " +
-      'Requires an available phone-number slot on your plan (Twilio Phone Number add-on is $3/month per extra number). ' +
-      'This is NOT for WhatsApp Cloud API numbers; WhatsApp uses waNumbers/{phoneId} and Meta credentials. ' +
-      'Tip: discover purchasable numbers via the platform UI / available-numbers endpoint before calling this.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        number: {
-          type: 'string',
-          description: 'Phone number in E.164 (e.g. "+14155551234"). Leading + required, no spaces.',
-        },
-        agentId: { type: 'string', description: 'Optional agent ID to assign the number to. Leave empty to assign later.' },
-        capabilities: {
-          type: 'array',
-          items: { type: 'string', enum: ['voice', 'sms'] },
-          description: 'Which capabilities to enable. Default: ["voice", "sms"].',
-        },
-      },
-      required: ['number'],
-    },
-  },
-  {
     name: 'import_twilio_number',
     description:
       'Import a Twilio SMS/voice number you already own into the workspace (uses your Twilio account credentials). ' +
@@ -6572,18 +6533,6 @@ const handleCallTool = async (request: CallToolRequest) => {
       case 'get_voice': {
         const validated = GetVoiceSchema.parse(args);
         const result = await getActiveClient().getVoice(validated.provider, validated.voiceId);
-        return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        };
-      }
-
-      case 'buy_twilio_number': {
-        const validated = BuyTwilioNumberSchema.parse(args);
-        const result = await getActiveClient().buyTwilioNumber(
-          validated.number,
-          validated.agentId,
-          validated.capabilities,
-        );
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };

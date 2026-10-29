@@ -127,7 +127,7 @@ describe('gateway-backed tools', () => {
       ['whatsapp_numbers_write', { action: 'constructor', agentId: 'a1', phoneId: 'p1' }],
       ['contacts_write', { action: 'merge', agentId: 'a1', sourceIdentityId: 's' }],
       ['email_channel_write', { action: 'create_inbox', domainId: 'd1' }],
-      ['workspace_write', { action: 'set_auto_billing' }],
+      ['workspace_write', { action: 'set_provider_keys' }],
     ]) {
       const out = await call(tool, args);
       assert.equal(out.success, false, `${tool} ${args.action}`);

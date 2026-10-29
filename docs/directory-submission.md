@@ -161,7 +161,7 @@ Confirm "I've run every tool" only after running them as a custom connector in C
 |---|---|
 | Directory guidelines (Software Directory Terms + Policy) | Agree. |
 | First-party API usage | The connector calls only Convocore's own API. |
-| Financial transactions | **Read carefully.** `buy_twilio_number` buys a phone number, `sms_numbers_write assign_rental` rents one, `workspace_write set_auto_billing` turns on auto top-up, and calls / SMS / campaigns spend credits. All are annotated destructive. If the policy forbids connectors that move money, consider hiding these from the hosted catalog (like `HOST_LOCAL_TOOLS`) before submitting. |
+| Financial transactions | The connector cannot buy or pay for anything: `buy_twilio_number` and the auto top-up action (`workspace_write set_auto_billing`) were removed. Plans, add-ons, number rentals and card top-ups are dashboard-only. Calls, SMS and campaigns use the workspace's existing credits and are annotated destructive. |
 | AI media generation | No image/video generation. Voice tools only list TTS voices and preview URLs. |
 | Prompt injection | Tool results contain customer-written text (conversations, leads, scraped pages). Tool descriptions do not instruct Claude to act on content from results. |
 | Conversation data collection | The server does not collect or store Claude conversations; telemetry excludes arguments and results. |
