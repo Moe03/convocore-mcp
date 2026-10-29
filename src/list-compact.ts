@@ -83,6 +83,8 @@ function compactAgent(agent: unknown): unknown {
   if (!src) return agent;
   const out = pick(src, COMPACT_AGENT_KEYS);
   if (out.ID == null && out.id != null) out.ID = out.id;
+  // /agents/search rows carry a database row UUID in `id`; agent tools need the agent ID.
+  if (out.ID != null) out.id = out.ID;
   out.description = truncate(out.description, 160);
   return out;
 }

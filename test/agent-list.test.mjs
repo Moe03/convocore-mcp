@@ -53,4 +53,13 @@ describe('compactAgentsListResult', () => {
     assert.equal(out.data[0].ID, '1');
     assert.equal(out.data[0].nodes, undefined);
   });
+
+  it('uses the agent ID for id when search rows carry a row UUID', () => {
+    const out = compactAgentsListResult({
+      agents: [{ ID: 'O49Gg4Jz5fApkJW85WJg', id: '0a99575c-1122-4f00-92ff-14bbc9d61b3b', title: 'T' }],
+      starredAgents: [{ ID: 'HUPdykI3Vla2T83Tc0AV', id: 'cb045fb0-a841-4384-b9b0-eb4e77bf4942' }],
+    });
+    assert.equal(out.agents[0].id, 'O49Gg4Jz5fApkJW85WJg');
+    assert.equal(out.starredAgents[0].id, 'HUPdykI3Vla2T83Tc0AV');
+  });
 });

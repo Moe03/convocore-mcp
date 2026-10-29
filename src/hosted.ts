@@ -574,6 +574,15 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  // Glama connector ownership claim for mcp.convocore.app; must stay published to stay verified.
+  if (req.method === 'GET' && pathname === '/.well-known/glama.json') {
+    sendJson(res, 200, {
+      $schema: 'https://glama.ai/mcp/schemas/connector.json',
+      claim: 'glama_claim_ib3xsWxe6Kx5JCOCkPL_JVoEMNiZttUi',
+    });
+    return;
+  }
+
   if (req.method === 'GET' && (pathname === '/health' || pathname === '/') && isGrayLabelRequest(req)) {
     sendJson(res, 200, { ok: true, service: 'mcp', path: MCP_PATH });
     return;
