@@ -44,6 +44,8 @@ const EXPECTED_DOMAIN_TOOLS = [
   'whatsapp_numbers_write',
   'whatsapp_templates_read',
   'whatsapp_templates_write',
+  'notifications_read',
+  'notifications_write',
   'whatsapp_campaigns_read',
   'whatsapp_campaigns_write',
   'meta_pages_read',

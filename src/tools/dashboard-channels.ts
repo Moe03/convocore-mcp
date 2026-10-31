@@ -142,6 +142,50 @@ const specs: RpcToolSpec[] = [
     },
   },
   {
+    name: 'notifications_read',
+    kind: 'read',
+    description:
+      'Your notifications inbox: things that changed outside this conversation. Today: Meta review results for WhatsApp templates (APPROVED / REJECTED / PAUSED / DISABLED, with the rejection reason). ' +
+      'Check it at the start of a session and after submitting or editing a template, instead of polling every template. Mark items handled with notifications_write.',
+    properties: {
+      agentId: { type: 'string', description: 'Only this agent. Omit for the whole workspace.' },
+      includeAcknowledged: { type: 'boolean', description: 'Also return items already marked as handled. Default false (unread only).' },
+      limit: { type: 'number', description: 'Default 50, max 100. Newest first.' },
+    },
+    actions: {
+      list: {
+        procedure: 'getWhatsappTemplateEvents',
+        summary: 'unread WhatsApp template review results, newest first',
+        input: (a) => pick(a, 'agentId', 'includeAcknowledged', 'limit'),
+      },
+    },
+  },
+  {
+    name: 'notifications_write',
+    kind: 'write',
+    description:
+      'Mark notifications_read items as handled so they stop showing as unread. Does not change any template.',
+    properties: {
+      eventIds: { type: 'array', items: { type: 'string' }, description: 'For acknowledge: ids from notifications_read (max 100).' },
+      agentId: { type: 'string', description: 'For acknowledge_all: limit to this agent.' },
+      all: { type: 'boolean', description: 'For acknowledge_all: must be true.' },
+    },
+    actions: {
+      acknowledge: {
+        procedure: 'ackWhatsappTemplateEvents',
+        summary: 'mark specific items as handled',
+        required: ['eventIds'],
+        input: (a) => pick(a, 'eventIds'),
+      },
+      acknowledge_all: {
+        procedure: 'ackWhatsappTemplateEvents',
+        summary: 'mark every unread item (optionally of one agent) as handled',
+        required: ['all'],
+        input: (a) => ({ ...pick(a, 'agentId'), all: a.all === true }),
+      },
+    },
+  },
+  {
     name: 'whatsapp_campaigns_read',
     kind: 'read',
     description:

@@ -116,6 +116,19 @@ describe('gateway-backed tools', () => {
     assert.equal(bad.success, false);
   });
 
+  it('read the notifications inbox and acknowledge items', async () => {
+    let r = await one('notifications_read', { action: 'list', agentId: 'a1', limit: 5, includeAcknowledged: true });
+    assert.equal(r.procedure, 'getWhatsappTemplateEvents');
+    assert.deepEqual(r.input, { agentId: 'a1', includeAcknowledged: true, limit: 5 });
+
+    r = await one('notifications_write', { action: 'acknowledge', eventIds: ['e1'], longAccessToken: 'x' });
+    assert.equal(r.procedure, 'ackWhatsappTemplateEvents');
+    assert.deepEqual(r.input, { eventIds: ['e1'] });
+
+    r = await one('notifications_write', { action: 'acknowledge_all', agentId: 'a1', all: true });
+    assert.deepEqual(r.input, { agentId: 'a1', all: true });
+  });
+
   it('reject unknown actions and missing inputs before any request', async () => {
     for (const [tool, args] of [
       ['whatsapp_numbers_write', { action: 'remove', agentId: 'a1' }],
@@ -152,6 +165,7 @@ describe('gateway-backed tools', () => {
       tool: {}, toolId: 't', targetAgentId: 'a2', targetAgentIds: ['a2'], access: 'workspace', scope: 'workspace',
       agentPrompt: 'p', logId: 1, traceId: 'tr', autoBilling: false, keys: {},
       query: 'select id from Leads where id is not null', recordId: '1', recordIds: ['1'], records: [{ Last_Name: 'x' }],
+      eventIds: ['e1'], all: true, includeAcknowledged: false, limit: 10,
       title: 't', content: 'c', type: 'google_calendar', settings: {}, formSubmitEmailsEnabled: true, branding: {}, kind: 'logo',
     };
     let actions = 0;

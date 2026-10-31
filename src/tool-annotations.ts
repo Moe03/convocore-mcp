@@ -199,6 +199,8 @@ export const TOOL_TITLES: Record<string, string> = {
   email_channel_write: 'Manage email channel',
 
   // Agent tools and variables
+  notifications_read: 'Read notifications inbox',
+  notifications_write: 'Mark notifications handled',
   list_agent_tools: 'List agent tools',
   get_agent_tool: 'Get agent tool',
   create_agent_tool: 'Create agent tool',
