@@ -199,14 +199,14 @@ export const TOOL_TITLES: Record<string, string> = {
   whatsapp_numbers_write: 'Manage WhatsApp numbers',
   whatsapp_templates_read: 'Read WhatsApp templates',
   whatsapp_templates_write: 'Manage WhatsApp templates',
+  notifications_read: 'Read notifications inbox',
+  notifications_write: 'Mark notifications handled',
   whatsapp_campaigns_read: 'Read WhatsApp campaigns',
   whatsapp_campaigns_write: 'Manage WhatsApp campaigns',
   email_channel_read: 'Read email channel',
   email_channel_write: 'Manage email channel',
 
   // Agent tools and variables
-  notifications_read: 'Read notifications inbox',
-  notifications_write: 'Mark notifications handled',
   list_agent_tools: 'List agent tools',
   get_agent_tool: 'Get agent tool',
   create_agent_tool: 'Create agent tool',
