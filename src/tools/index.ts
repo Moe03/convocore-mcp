@@ -10,6 +10,7 @@ import { agentVariablesModule } from './agent-variables.js';
 import { callLogsModule } from './call-logs.js';
 import { campaignsModule } from './campaigns.js';
 import { channelsModule } from './channels.js';
+import { mcpConnectionsModule } from './mcp-connections.js';
 import { createSearchCatalogModule } from './catalog.js';
 import { clientsModule } from './clients.js';
 import { cloneSendModule } from './clone-send.js';
@@ -41,6 +42,7 @@ const BASE_MODULES: ToolModule[] = [
   kbExtrasModule,
   whatsappModule,
   channelsModule,
+  mcpConnectionsModule,
   campaignsModule,
   callLogsModule,
   outboundModule,

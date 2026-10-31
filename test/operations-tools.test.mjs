@@ -365,6 +365,38 @@ describe('channels and connect links', () => {
   });
 });
 
+describe('MCP server connections', () => {
+  it('creates a connect link (attach on connect) and says what to do next', async () => {
+    responses.set('POST /mcp-connections/connect-links', {
+      success: true, connectionId: 'c1', url: 'https://portal.agency.com/app/na/connect/mcp?session=t', expiresAtMs: 1760000000000, serverName: 'notion',
+    });
+    const r = await one('create_mcp_connect_link', { serverUrl: 'https://mcp.notion.com/mcp', agentIds: ['a1'], ttlMinutes: 30 });
+    assert.equal(sent(r), 'POST /mcp-connections/connect-links');
+    assert.deepEqual(r.body, { serverUrl: 'https://mcp.notion.com/mcp', agentIds: ['a1'], ttlMinutes: 30 });
+    assert.equal(r.out.url, 'https://portal.agency.com/app/na/connect/mcp?session=t');
+    assert.equal(r.out.expiresAt, '2025-10-09T08:53:20.000Z');
+    assert.match(r.out.nextSteps.join(' '), /get_mcp_connection/);
+    assert.match(r.out.nextSteps.join(' '), /attached to the requested agents automatically/);
+  });
+
+  it('list, get, attach, detach, delete hit the right endpoints', async () => {
+    assert.equal(sent(await one('list_mcp_connections', {})), 'GET /mcp-connections');
+    const listed = await one('list_mcp_connections', { agentId: 'a1' });
+    assert.equal(sent(listed), 'GET /mcp-connections');
+    assert.deepEqual(listed.query, { agentId: 'a1' });
+    assert.equal(sent(await one('get_mcp_connection', { connectionId: 'c1' })), 'GET /mcp-connections/c1');
+    let r = await one('attach_mcp_connection', { connectionId: 'c1', agentId: 'a1', allNodes: true });
+    assert.equal(sent(r), 'POST /mcp-connections/c1/attach');
+    assert.deepEqual(r.body, { agentId: 'a1', allNodes: true });
+    r = await one('detach_mcp_connection', { connectionId: 'c1', agentId: 'a1' });
+    assert.equal(sent(r), 'POST /mcp-connections/c1/detach');
+    assert.deepEqual(r.body, { agentId: 'a1' });
+    assert.equal(sent(await one('delete_mcp_connection', { connectionId: 'c1' })), 'DELETE /mcp-connections/c1');
+    const out = await call('create_mcp_connect_link', {});
+    assert.equal(out.success, false);
+  });
+});
+
 describe('agent extras', () => {
   it('audit log, handoff reminder, gallery templates, notification email', async () => {
     let r = await one('get_agent_audit_log', { agentId: 'a1', limit: 10 });

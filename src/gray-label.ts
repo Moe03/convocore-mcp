@@ -204,6 +204,13 @@ export const GRAY_LABEL_TOOLS = new Set<string>([
   'get_ui_engine_spec',
   'sleep',
   'search_mcp_tools',
+  // MCP server connections (OAuth): scoped to the client's organization by the API
+  'create_mcp_connect_link',
+  'list_mcp_connections',
+  'get_mcp_connection',
+  'attach_mcp_connection',
+  'detach_mcp_connection',
+  'delete_mcp_connection',
 ]);
 
 /** Argument names that carry one agent id / a list of agent ids. */
