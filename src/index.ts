@@ -2215,7 +2215,10 @@ async function patchKbDocExact(args: {
   field: 'content' | 'name';
 }): Promise<Record<string, unknown>> {
   const raw = await getActiveClient().getKBDoc(args.agentId, args.docId);
-  const doc = unwrapRecord(raw);
+  const outer = unwrapRecord(raw);
+  // VG agents return the stored doc under data.vgKbDoc; VF agents return it flat.
+  const doc =
+    outer.vgKbDoc && typeof outer.vgKbDoc === 'object' ? (outer.vgKbDoc as Record<string, any>) : outer;
   const current =
     args.field === 'name'
       ? typeof doc.name === 'string'
