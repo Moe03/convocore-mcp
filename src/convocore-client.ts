@@ -385,7 +385,7 @@ export class ConvocoreClient {
         : '';
     // Client connections may not list the whole workspace; search is pinned to their agents.
     if (this.config.clientScoped) {
-      return this.request<any>(`/agents/search?page=1&limit=${lim && lim > 0 ? Math.min(Math.floor(lim), 100) : 100}`);
+      return this.request<any>(`/agents/search?page=1&limit=${lim && lim > 0 ? Math.min(Math.floor(lim), 50) : 50}`);
     }
     return this.request<any>(`/agents${q}`);
   }
@@ -405,7 +405,7 @@ export class ConvocoreClient {
     const params = new URLSearchParams({
       workspaceId,
       page: page.toString(),
-      limit: limit.toString(),
+      limit: Math.max(1, Math.min(Math.floor(limit), 50)).toString(),
       sortBy,
     });
     // Only send when true: the API's query parser coerces "false" with Boolean(),

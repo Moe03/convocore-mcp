@@ -37,6 +37,8 @@ export type ToolCallEvent = {
   transport: TelemetryTransport;
   clientName?: string;
   clientVersion?: string;
+  /** MCP transport session id (hosted: one per connected client). Falls back to the process id. */
+  sessionId?: string;
 };
 
 type WireEvent = ToolCallEvent & {
@@ -163,7 +165,7 @@ export function recordToolCall(config: ConvocoreConfig | null, event: ToolCallEv
       tool: event.tool.slice(0, 80),
       durationMs: Math.max(0, Math.round(event.durationMs)),
       ts: Date.now(),
-      sessionId: SESSION_ID,
+      sessionId: event.sessionId?.slice(0, 64) || SESSION_ID,
       mcpVersion: PACKAGE_VERSION,
       nodeVersion: process.versions.node,
       platform: process.platform,

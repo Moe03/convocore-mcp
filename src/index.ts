@@ -704,7 +704,7 @@ const SearchAgentsSchema = z.object({
   mode: ListModeField,
   search: z.string().optional().describe('Search query to find agents'),
   page: z.number().optional().default(1).describe('Page number'),
-  limit: z.number().optional().default(50).describe('Results per page'),
+  limit: z.number().int().min(1).max(50).optional().default(50).describe('Results per page (max 50)'),
   sortBy: z.string().optional().default('newest').describe('Sort by: newest, oldest, alphabetical'),
   starredOnly: z.boolean().optional().default(false).describe('Show only starred agents'),
 });
@@ -5452,7 +5452,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5566,7 +5566,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5586,7 +5586,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5599,7 +5599,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5622,7 +5622,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(payload, null, 2),
+              text: JSON.stringify(payload),
             },
           ],
         };
@@ -5648,7 +5648,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(payload, null, 2),
+              text: JSON.stringify(payload),
             },
           ],
         };
@@ -5661,7 +5661,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5678,7 +5678,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5694,7 +5694,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5710,7 +5710,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5735,7 +5735,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(payload, null, 2),
+              text: JSON.stringify(payload),
             },
           ],
         };
@@ -5751,7 +5751,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5767,7 +5767,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5784,7 +5784,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5798,7 +5798,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5814,7 +5814,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5838,7 +5838,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5855,7 +5855,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5873,7 +5873,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5889,7 +5889,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5916,7 +5916,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5940,7 +5940,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5961,7 +5961,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -5983,7 +5983,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(payload, null, 2),
+              text: JSON.stringify(payload),
             },
           ],
         };
@@ -5996,7 +5996,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6013,7 +6013,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6027,7 +6027,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6047,7 +6047,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6060,7 +6060,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6073,7 +6073,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6246,7 +6246,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const { inspectFile } = await import('./file-readers.js');
         const result = await inspectFile(validated);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6331,7 +6331,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const { readSpreadsheet } = await import('./file-readers.js');
         const result = await readSpreadsheet(src, { sheet, range, format, headerRow, maxRows });
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6418,7 +6418,7 @@ const handleCallTool = async (request: CallToolRequest) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result),
             },
           ],
         };
@@ -6509,7 +6509,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         ListVoiceProvidersSchema.parse(args ?? {});
         const result = await getActiveClient().listVoiceProviders();
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6517,7 +6517,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = ListVoiceModelsSchema.parse(args);
         const result = await getActiveClient().listVoiceModels(validated.provider);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6525,7 +6525,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = SearchVoicesSchema.parse(args ?? {});
         const result = await getActiveClient().searchVoices(validated);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6534,7 +6534,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const { provider, ...filters } = validated;
         const result = await getActiveClient().listProviderVoices(provider, filters);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6542,7 +6542,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = GetVoiceSchema.parse(args);
         const result = await getActiveClient().getVoice(validated.provider, validated.voiceId);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6550,7 +6550,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = ImportTwilioNumberSchema.parse(args);
         const result = await getActiveClient().importTwilioNumber(validated.payload);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6558,7 +6558,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = ReleaseTwilioNumberSchema.parse(args);
         const result = await getActiveClient().releaseTwilioNumber(validated.payload);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6566,7 +6566,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = CheckTwilioNumberSchema.parse(args);
         const result = await getActiveClient().checkTwilioNumber(validated.payload);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6574,7 +6574,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         const validated = SyncSmsTwilioNumberSchema.parse(args);
         const result = await getActiveClient().syncSmsTwilioNumber(validated.payload);
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result) }],
         };
       }
 
@@ -6597,18 +6597,10 @@ const handleCallTool = async (request: CallToolRequest) => {
         const uiEngineGuidance = result.uiEngineEnabled
           ? {
               note:
-                'This turn used the Convocore UI Engine. The tested agent\'s LLM was instructed to emit a single JSON array of message objects ([{ type, payload }, ...]). The server then wraps each entry into messages[].item inside the TurnProps snapshot you see in `uiEngineSnapshot`.',
-              expectedAgentOutputContract: UI_ENGINE_SPEC.agentOutputContract,
-              preferredStructure: UI_ENGINE_SPEC.preferredStructure,
-              channelRules: UI_ENGINE_SPEC.channelRules,
-              validationChecklist: UI_ENGINE_SPEC.validationChecklist,
+                'UI Engine turn: `uiEngineSnapshot` is the LATEST full snapshot (chunks overwrite) and equals the agent\'s final output. Agent output contract: a single JSON array of { type, payload } messages.',
               allowedMessageTypes: Object.keys(UI_ENGINE_SPEC.messageTypes),
-              snapshotSemantics:
-                'UI Engine chunks are OVERWRITING — `uiEngineSnapshot` is the LATEST full snapshot, equivalent to the agent\'s final output for this turn.',
-              forPlainTextOnNextTurn:
-                'Pass disableUiEngine: true on the next interact_with_agent call to bypass UI Engine for one turn.',
-              fullSpecHint:
-                'For the complete schema (every payload field, validation rules, examples) call `get_ui_engine_spec`.',
+              forPlainTextOnNextTurn: 'Pass disableUiEngine: true to bypass UI Engine for one turn.',
+              fullSpecHint: 'Call `get_ui_engine_spec` for the full schema, channel rules and validation checklist.',
             }
           : undefined;
 
@@ -6631,7 +6623,7 @@ const handleCallTool = async (request: CallToolRequest) => {
             };
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(responsePayload, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(responsePayload) }],
         };
       }
 
@@ -6680,7 +6672,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         }
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
         };
       }
 
@@ -6696,7 +6688,7 @@ const handleCallTool = async (request: CallToolRequest) => {
               };
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
         };
       }
 
@@ -6763,7 +6755,7 @@ const handleCallTool = async (request: CallToolRequest) => {
         }
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
         };
       }
 
@@ -6817,7 +6809,7 @@ const handleGrayLabelCallTool = async (request: CallToolRequest, session: GrayLa
   return rebrandValue(result, session.brand);
 };
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const startedAt = performance.now();
   const result = grayLabel
     ? await handleGrayLabelCallTool(request, grayLabel)
@@ -6833,6 +6825,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       transport: options?.hosted ? 'hosted' : 'stdio',
       clientName: client?.name,
       clientVersion: client?.version,
+      sessionId: extra?.sessionId,
     });
   } catch {
     // Telemetry must never affect a tool call.
