@@ -194,6 +194,8 @@ export const TOOL_TITLES: Record<string, string> = {
   meta_pages_read: 'Check Facebook page',
   get_whatsapp_ai_rules: 'Get WhatsApp AI rules',
   update_whatsapp_ai_rules: 'Update WhatsApp AI rules',
+  get_whatsapp_follow_ups: 'Get WhatsApp follow-ups',
+  update_whatsapp_follow_ups: 'Set WhatsApp follow-ups',
   update_whatsapp_number_settings: 'Update WhatsApp number settings',
   whatsapp_numbers_read: 'Read WhatsApp numbers',
   whatsapp_numbers_write: 'Manage WhatsApp numbers',

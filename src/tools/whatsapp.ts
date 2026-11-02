@@ -254,7 +254,67 @@ const tools: Tool[] = [
       required: ['agentId', 'phoneId', 'settings'],
     },
   },
+  {
+    name: 'get_whatsapp_follow_ups',
+    description:
+      'Read the WhatsApp follow-ups of a Convocore agent: messages sent automatically when a customer stops replying (e.g. +1h, +8h, +24h after their last message). Returns the steps and warnings (e.g. a free-text step after 24h that Meta will refuse).',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    inputSchema: { type: 'object', properties: { agentId: { type: 'string' } }, required: ['agentId'] },
+  },
+  {
+    name: 'update_whatsapp_follow_ups',
+    description:
+      'Set the WhatsApp follow-ups of a Convocore agent: automatic messages when a customer stops replying. Replaces the whole sequence (read it first with get_whatsapp_follow_ups). ' +
+      "Each step: delayMinutes counted from the customer's LAST message (not the previous step), 1 to 43200 (30 days), e.g. 60, 480, 1440. A new customer message cancels pending follow-ups and restarts the sequence. " +
+      "Meta rule: free text (message) only goes out within 24h of the customer's last message. Steps at 24h or later MUST have an APPROVED templateName + templateLanguage (create one with whatsapp_templates_write and wait for approval). " +
+      "A step may have both: the message is used while the window is open, the template after. {{contact_name}} in message or templateBodyParams becomes the customer's WhatsApp name. " +
+      'Chats a human has taken over are skipped unless skipIfHumanHandoff=false. Relay the returned warnings to the user.',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string' },
+        enabled: { type: 'boolean', description: 'Master switch. Default true. false stops all follow-ups for this agent.' },
+        skipIfHumanHandoff: { type: 'boolean', description: 'Default true: no follow-ups on chats a human has taken over.' },
+        steps: {
+          type: 'array',
+          maxItems: 10,
+          description: 'The full sequence (max 10). Send [] with enabled=false to turn follow-ups off.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              delayMinutes: { type: 'number', minimum: 1, maximum: 43200, description: "Minutes after the customer's last message, e.g. 60 (+1h), 480 (+8h), 1440 (+24h)." },
+              message: { type: 'string', description: 'Free text, used while the 24h window is open.' },
+              templateName: { type: 'string', description: 'Approved template, required for steps at 24h or later.' },
+              templateLanguage: { type: 'string', description: 'Template language as approved, e.g. "en", "en_US", "ar".' },
+              templateBodyParams: { type: 'array', items: { type: 'string' }, description: 'Values for {{1}}, {{2}}… in the template body.' },
+            },
+            required: ['delayMinutes'],
+          },
+        },
+      },
+      required: ['agentId', 'steps'],
+    },
+  },
 ];
+
+const FollowUpStepSchema = z
+  .object({
+    delayMinutes: z.number().int().min(1).max(43200),
+    message: z.string().max(4096).optional(),
+    templateName: z.string().optional(),
+    templateLanguage: z.string().optional(),
+    templateBodyParams: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const FollowUpsSchema = z.object({
+  agentId: z.string().min(1),
+  enabled: z.boolean().optional(),
+  skipIfHumanHandoff: z.boolean().optional(),
+  steps: z.array(FollowUpStepSchema).max(10),
+});
 
 export const whatsappModule: ToolModule = {
   tools,
@@ -266,6 +326,18 @@ export const whatsappModule: ToolModule = {
     update_whatsapp_ai_rules: wrapHandler('update_whatsapp_ai_rules', async (args) => {
       const v = UpdateRulesSchema.parse(args);
       return getActiveClient().updateWhatsappAiRules(v.agentId, v.rules);
+    }),
+    get_whatsapp_follow_ups: wrapHandler('get_whatsapp_follow_ups', async (args) => {
+      const v = GetSchema.parse(args);
+      return getActiveClient().getWhatsappFollowUps(v.agentId);
+    }),
+    update_whatsapp_follow_ups: wrapHandler('update_whatsapp_follow_ups', async (args) => {
+      const v = FollowUpsSchema.parse(args);
+      return getActiveClient().setWhatsappFollowUps(v.agentId, {
+        enabled: v.enabled ?? true,
+        skipIfHumanHandoff: v.skipIfHumanHandoff,
+        steps: v.steps,
+      });
     }),
     update_whatsapp_number_settings: wrapHandler('update_whatsapp_number_settings', async (args) => {
       const v = UpdateNumberSchema.parse(args);

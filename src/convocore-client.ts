@@ -2077,6 +2077,17 @@ export class ConvocoreClient {
     });
   }
 
+  async getWhatsappFollowUps(agentId: string): Promise<any> {
+    return this.request<any>(`/agents/${encodeURIComponent(agentId)}/whatsapp/follow-ups`);
+  }
+
+  async setWhatsappFollowUps(agentId: string, whatsappFollowUps: Record<string, unknown>): Promise<any> {
+    return this.request<any>(`/agents/${encodeURIComponent(agentId)}/whatsapp/follow-ups`, {
+      method: 'PUT',
+      body: JSON.stringify({ whatsappFollowUps }),
+    });
+  }
+
   async updateWhatsappNumberSettings(
     agentId: string,
     phoneId: string,
