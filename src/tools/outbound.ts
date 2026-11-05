@@ -20,6 +20,9 @@ const CallSchema = z.object({
   campaignId: z.string().optional(),
   leadInfo: z.record(z.unknown()).optional(),
   options: z.record(z.unknown()).optional(),
+  channel: z.enum(['phone', 'whatsapp']).optional(),
+  requestPermission: z.boolean().optional(),
+  permissionMessage: z.string().max(1024).optional(),
   mode: LightModeField,
 });
 
@@ -82,19 +85,39 @@ const tools: Tool[] = [
   {
     name: 'start_outbound_call',
     description:
-      'Place a REAL outbound phone call now: the agent calls the "to" number from its assigned number and talks to whoever answers. Bills voice minutes. Confirm the number with the user first. For many leads at once use contact_leads or a campaign (campaigns_write).',
+      'Place a REAL outbound call now: the agent calls the "to" number and talks to whoever answers. Bills voice minutes. Confirm the number with the user first. channel=phone (default) is a normal phone call from the agent\'s assigned number. channel=whatsapp is a WhatsApp voice call from one of the agent\'s WhatsApp numbers (it needs voice calling switched on, see whatsapp_numbers_write set_voice_calling). WhatsApp only lets a business call someone who has allowed it: if they have not, they are sent a permission prompt in the chat and NO call is placed (the result status is "permission_requested"; call again once they accept). WhatsApp allows 1 permission prompt per customer per 24 hours and 2 per 7 days, and the prompt only works within 24 hours of the customer last messaging the number. For many leads at once use contact_leads or a campaign (campaigns_write).',
     annotations: OUTBOUND_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
         agentId: { type: 'string' },
         to: { type: 'string', description: 'Number to call, E.164 (e.g. +15551234567).' },
-        from: { type: 'string', description: "Optional: one of the agent's numbers. Defaults to its primary number." },
+        from: {
+          type: 'string',
+          description:
+            "Optional: one of the agent's numbers (a phone number for channel=phone, a WhatsApp number for channel=whatsapp), in E.164 with a leading +. Defaults to the agent's primary number.",
+        },
         campaignId: { type: 'string', description: 'Optional: attribute the call to a campaign.' },
         leadInfo: leadInfoProperty,
         options: {
           type: 'object',
           description: 'Optional per-call agent overrides (e.g. initialPrompt, variables).',
+        },
+        channel: {
+          type: 'string',
+          enum: ['phone', 'whatsapp'],
+          description:
+            'How to place the call. phone (default): a normal phone call. whatsapp: a WhatsApp voice call; the customer must have allowed calls from your business, otherwise they get a permission prompt and no call is placed.',
+        },
+        requestPermission: {
+          type: 'boolean',
+          description:
+            'channel=whatsapp only. When the customer has not allowed calls yet, send them the permission prompt in the chat (default true). false sends nothing and returns status "no_permission".',
+        },
+        permissionMessage: {
+          type: 'string',
+          description:
+            'channel=whatsapp only. Text of the permission prompt the customer sees, for example "May we call you about your booking?" (max 1024 characters). A default message is used when empty.',
         },
         mode: LightModeProperty,
       },
