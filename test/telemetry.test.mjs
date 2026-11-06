@@ -44,6 +44,12 @@ describe('telemetry', () => {
       errorType: 'error',
       errorMessage: 'nope',
     });
+    assert.deepEqual(
+      classifyToolResult(
+        text({ success: false, tool: { id: 't1' }, request: { method: 'POST' }, response: { status: 404, ok: false, body: {} } })
+      ),
+      { success: false, errorType: 'target_http_error', errorMessage: 'Target responded HTTP 404' }
+    );
   });
 
   it('failure messages are redacted and short', () => {

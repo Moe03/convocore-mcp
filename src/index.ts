@@ -29,6 +29,7 @@ import {
   initDefaultRequestContext,
 } from './request-context.js';
 import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { WIDGET_CSS_SYSTEM_PROMPT, buildWidgetCssPrompt } from './css-prompt.js';
 import { PRICING, VOICE_PROVIDERS } from './pricing.js';
@@ -6863,8 +6864,17 @@ async function startStdioTransport() {
   console.error('Convocore MCP Server running on stdio');
 }
 
-const entryArg = process.argv[1] ? path.resolve(process.argv[1]) : '';
-const thisFile = fileURLToPath(import.meta.url);
+/** Resolves symlinks: npx and global installs run the bin through node_modules/.bin/convocore-mcp. */
+function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+const entryArg = process.argv[1] ? realPath(process.argv[1]) : '';
+const thisFile = realPath(fileURLToPath(import.meta.url));
 const isHostedTransport =
   process.env.MCP_TRANSPORT === 'http' ||
   entryArg.endsWith(`${path.sep}hosted.js`) ||

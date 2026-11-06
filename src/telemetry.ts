@@ -130,6 +130,11 @@ export function classifyToolResult(result: unknown): { success: boolean; errorTy
   if (!r?.isError && !looksFailed) return { success: true };
   const match = /"errorType":\s*"([a-z_]{1,40})"/.exec(text);
   const msg = /"message":\s*"((?:[^"\\]|\\.){1,400})"/.exec(text)?.[1] ?? (r?.isError ? text.slice(0, 400) : '');
+  // Request testers (test_agent_tool_request) succeed as tools but report the target's non-2xx reply.
+  const targetStatus = !match && !msg ? /"response":\s*\{\s*"status":\s*(\d{3})/.exec(text)?.[1] : undefined;
+  if (targetStatus) {
+    return { success: false, errorType: 'target_http_error', errorMessage: `Target responded HTTP ${targetStatus}` };
+  }
   return {
     success: false,
     errorType: match?.[1] || 'error',
