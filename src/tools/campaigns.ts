@@ -35,7 +35,7 @@ const one = (agentId: string, campaignId: string) =>
   `${base(agentId)}/${encodeURIComponent(campaignId)}`;
 
 const CAMPAIGN_FIELDS =
-  'name, leadGroupName (a lead group name, or "all"), delayBetweenEachCall (seconds), concurrentSlots, openingMessage (exact first line the agent says on this campaign's calls; supports {{name}}, {{first_name}}, {{company}}, {{email}}; empty = the agent's outbound opening, set on the start node as startConfig.outboundInitialMessage, else its normal greeting), initialPrompt (instructions, not the first line), overrideInitialPrompt, postCallPrompt, postCallMetrics (custom metric ids), openTime / closeTime ("HH:mm" 24h), openDays (monday…sunday), timezone (IANA)';
+  'name, leadGroupName (a lead group name, or "all"), delayBetweenEachCall (seconds), concurrentSlots, openingMessage (exact first line the agent says on the calls of this campaign; supports {{name}}, {{first_name}}, {{company}}, {{email}}; empty = the outbound opening of the agent, set on the start node as startConfig.outboundInitialMessage, else its normal greeting), initialPrompt (instructions, not the first line), overrideInitialPrompt, postCallPrompt, postCallMetrics (custom metric ids), openTime / closeTime ("HH:mm" 24h), openDays (monday…sunday), timezone (IANA)';
 
 const tools: Tool[] = [
   {

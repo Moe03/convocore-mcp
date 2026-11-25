@@ -278,6 +278,21 @@ describe('lead groups', () => {
     assert.deepEqual(r.body, { leadIds: 'l1,l2' });
   });
 
+  it('remove_leads takes leads out of one group, add_contacts imports into it', async () => {
+    let r = await one('lead_groups_write', { action: 'remove_leads', agentId: 'a1', groupName: 'VIP', leadIds: ['l1'] });
+    assert.equal(sent(r), 'POST /agents/a1/groups/vip/members');
+    assert.deepEqual(r.body, { removeLeadIds: ['l1'] });
+    r = await one('lead_groups_write', {
+      action: 'add_contacts', agentId: 'a1', groupName: 'vip', contacts: [{ userPhone: '+97333000000' }], rawText: '+201000000000',
+    });
+    assert.equal(sent(r), 'POST /agents/a1/groups/vip/contacts');
+    assert.deepEqual(r.body, { contacts: [{ userPhone: '+97333000000' }], rawText: '+201000000000' });
+    assert.equal((await call('lead_groups_write', { action: 'remove_leads', agentId: 'a1', groupName: 'all', leadIds: ['l1'] })).success, false);
+    assert.equal(requests.length, 0);
+    assert.equal((await call('lead_groups_write', { action: 'add_contacts', agentId: 'a1', groupName: 'vip' })).success, false);
+    assert.equal(requests.length, 0);
+  });
+
   it('rename moves every lead, page by page', async () => {
     const pages = [Array.from({ length: 100 }, (_, i) => ({ id: `a${i}` })), [{ id: 'z1' }, { id: 'z2' }]];
     let reads = 0;
