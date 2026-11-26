@@ -9,6 +9,7 @@ import { agentToolsModule } from './agent-tools.js';
 import { agentVariablesModule } from './agent-variables.js';
 import { callLogsModule } from './call-logs.js';
 import { campaignsModule } from './campaigns.js';
+import { callOutcomesModule } from './call-outcomes.js';
 import { channelsModule } from './channels.js';
 import { mcpConnectionsModule } from './mcp-connections.js';
 import { createSearchCatalogModule } from './catalog.js';
@@ -30,6 +31,7 @@ import { testingModule } from './testing.js';
 import { whatsappModule } from './whatsapp.js';
 
 const BASE_MODULES: ToolModule[] = [
+  callOutcomesModule,
   orgsModule,
   agencyModule,
   clientsModule,

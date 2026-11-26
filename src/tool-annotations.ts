@@ -176,6 +176,8 @@ export const TOOL_TITLES: Record<string, string> = {
   call_logs_write: 'Manage call logs',
   campaigns_read: 'Read call campaigns',
   campaigns_write: 'Manage call campaigns',
+  call_outcomes_read: 'Read Do Not Call list and callbacks',
+  call_outcomes_write: 'Manage Do Not Call list and callbacks',
   sms_numbers_read: 'Read SMS numbers',
   sms_numbers_write: 'Manage SMS numbers',
 
@@ -282,6 +284,7 @@ export const OPEN_WORLD_TOOLS = new Set([
   'contact_leads',
   'send_channel_message',
   'campaigns_write',
+  'call_outcomes_write',
   'whatsapp_campaigns_write',
   'email_channel_write',
   'notification_email',

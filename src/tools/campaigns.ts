@@ -13,11 +13,12 @@ import {
 } from './helpers.js';
 
 const ReadSchema = z.object({
-  action: z.enum(['list', 'get']),
+  action: z.enum(['list', 'get', 'outcomes']),
   agentId: z.string().min(1),
   campaignId: z.string().optional(),
   page: z.number().int().positive().optional(),
   limit: z.number().int().positive().max(100).optional(),
+  callsLimit: z.number().int().positive().max(2000).optional(),
   mode: LightModeField,
 });
 
@@ -35,22 +36,23 @@ const one = (agentId: string, campaignId: string) =>
   `${base(agentId)}/${encodeURIComponent(campaignId)}`;
 
 const CAMPAIGN_FIELDS =
-  'name, leadGroupName (a lead group name, or "all"), delayBetweenEachCall (seconds), concurrentSlots, openingMessage (exact first line the agent says on the calls of this campaign; supports {{name}}, {{first_name}}, {{company}}, {{email}}; empty = the outbound opening of the agent, set on the start node as startConfig.outboundInitialMessage, else its normal greeting), initialPrompt (instructions, not the first line), overrideInitialPrompt, postCallPrompt, postCallMetrics (custom metric ids), openTime / closeTime ("HH:mm" 24h), openDays (monday…sunday), timezone (IANA)';
+  'name, leadGroupName (a lead group name, or "all"), delayBetweenEachCall (seconds), concurrentSlots, openingMessage (exact first line the agent says on the calls of this campaign; supports {{name}}, {{first_name}}, {{company}}, {{email}}; empty = the outbound opening of the agent, set on the start node as startConfig.outboundInitialMessage, else its normal greeting), objective (campaign objective / success criteria, e.g. "booked a consultation"; decides which calls count as Successful), initialPrompt (instructions, not the first line), overrideInitialPrompt, postCallPrompt, postCallMetrics (custom metric ids), openTime / closeTime ("HH:mm" 24h), openDays (monday…sunday), timezone (IANA)';
 
 const tools: Tool[] = [
   {
     name: 'campaigns_read',
     description:
-      'Read outbound call campaigns of an agent. Actions: list (paginated, with progress counters: totalLeads, contactedLeads, successfulCalls, missingCalls, onGoingCalls), get (one campaign by campaignId). To change campaigns use campaigns_write. WhatsApp broadcast campaigns are not covered.',
+      'Read outbound call campaigns of an agent. Actions: list (paginated, with progress counters: totalLeads, contactedLeads, successfulCalls, missingCalls, onGoingCalls), get (one campaign by campaignId), outcomes (campaignId: progress (totalLeads, called, remaining), status breakdown with counts and percentages (No Answer, Do Not Call, Busy / Call Back Later, Successful, Completed not successful), successRate, upcomingCallbacks, doNotCall numbers from this campaign, and the per-call list with lead, time, duration, status, reason and recording). To change campaigns use campaigns_write; Do Not Call list and callbacks: call_outcomes_read / call_outcomes_write. WhatsApp broadcast campaigns are not covered.',
     annotations: READ_ANNOTATIONS,
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'get'] },
+        action: { type: 'string', enum: ['list', 'get', 'outcomes'] },
         agentId: { type: 'string' },
-        campaignId: { type: 'string', description: 'Required for get.' },
+        campaignId: { type: 'string', description: 'Required for get and outcomes.' },
         page: { type: 'number' },
         limit: { type: 'number', description: 'Default 10.' },
+        callsLimit: { type: 'number', description: 'For outcomes: max per-call rows (default 500).' },
         mode: LightModeProperty,
       },
       required: ['action', 'agentId'],
@@ -98,6 +100,13 @@ export const campaignsModule: ToolModule = {
       if (v.action === 'get') {
         requireFor(v.action, v, 'campaignId');
         return applyLightMode(v.mode, await client.api('GET', one(v.agentId, v.campaignId!)));
+      }
+      if (v.action === 'outcomes') {
+        requireFor(v.action, v, 'campaignId');
+        return applyLightMode(
+          v.mode,
+          await client.api('GET', `${one(v.agentId, v.campaignId!)}/outcomes`, { query: { callsLimit: v.callsLimit } })
+        );
       }
       return applyLightMode(
         v.mode,

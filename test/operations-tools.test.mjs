@@ -293,6 +293,29 @@ describe('lead groups', () => {
     assert.equal(requests.length, 0);
   });
 
+  it('call outcomes: Do Not Call list, callbacks, and campaign outcomes', async () => {
+    let r = await one('call_outcomes_write', { action: 'add_dnc', agentId: 'a1', phone: '+97333001122', reason: 'asked' });
+    assert.equal(sent(r), 'POST /agents/a1/do-not-call');
+    assert.deepEqual(r.body, { phone: '+97333001122', reason: 'asked' });
+    r = await one('call_outcomes_write', { action: 'remove_dnc', agentId: 'a1', phone: '+97333001122' });
+    assert.equal(sent(r), 'POST /agents/a1/do-not-call/remove');
+    r = await one('call_outcomes_write', {
+      action: 'schedule_callback', agentId: 'a1', phone: '+97333001122', localDateTime: '2026-12-01T17:00', campaignId: 'c1',
+    });
+    assert.equal(sent(r), 'POST /agents/a1/callbacks');
+    assert.equal(r.body.localDateTime, '2026-12-01T17:00');
+    assert.equal(r.body.campaignId, 'c1');
+    r = await one('call_outcomes_write', { action: 'cancel_callback', agentId: 'a1', callbackId: 'cb1' });
+    assert.equal(sent(r), 'PATCH /agents/a1/callbacks/cb1');
+    assert.deepEqual(r.body, { cancel: true });
+    r = await one('call_outcomes_read', { action: 'list_callbacks', agentId: 'a1', campaignId: 'c1', status: 'pending' });
+    assert.equal(sent(r), 'GET /agents/a1/callbacks');
+    r = await one('campaigns_read', { action: 'outcomes', agentId: 'a1', campaignId: 'c1' });
+    assert.equal(sent(r), 'GET /agents/a1/campaigns/c1/outcomes');
+    assert.equal((await call('call_outcomes_write', { action: 'schedule_callback', agentId: 'a1', phone: '+1' })).success, false);
+    assert.equal(requests.length, 0);
+  });
+
   it('rename moves every lead, page by page', async () => {
     const pages = [Array.from({ length: 100 }, (_, i) => ({ id: `a${i}` })), [{ id: 'z1' }, { id: 'z2' }]];
     let reads = 0;

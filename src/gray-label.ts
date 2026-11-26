@@ -186,6 +186,8 @@ export const GRAY_LABEL_TOOLS = new Set<string>([
   'lead_groups_write',
   'campaigns_read',
   'campaigns_write',
+  'call_outcomes_read',
+  'call_outcomes_write',
   'call_logs_read',
   'call_logs_write',
   'get_agent_phone',
